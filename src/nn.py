@@ -1,56 +1,110 @@
+"""A tiny PyTorch-like neural network API built on :mod:`src.engine`.
+
+The hierarchy is deliberately simple:
+
+``Neuron``  -- one weighted sum plus bias, passed through an activation
+``Layer``   -- a list of ``nout`` neurons with ``nin`` inputs
+``MLP``     -- a chain of layers; the final layer is linear (no
+               activation) so the network can emit unbounded scores,
+               which is what loss functions such as hinge/MSE prefer.
+
+Every module exposes the same two methods:
+
+``parameters()`` -- a flat list of every :class:`Value` that can be trained
+``zero_grad()``  -- resets the gradient of every parameter between steps
+"""
+
 import random
+
 from src.engine import Value
 
+
 class Neuron:
-    def __init__(self, nin):
-        # TODO: Initialize weights (w) as a list of Value objects (random uniform -1 to 1)
-        # TODO: Initialize bias (b) as a Value object (random uniform -1 to 1)
-        pass
+    """A single perceptron: ``activation(w . x + b)``."""
+
+    def __init__(self, nin, nonlin=True):
+        # Weights: one Value per input, uniform in [-1, 1].  A small random
+        # range keeps initial pre-activations in tanh's linear regime, so
+        # no unit starts saturated (vanishing gradients at step 0).
+        self.w = [Value(random.uniform(-1, 1)) for _ in range(nin)]
+        self.b = Value(random.uniform(-1, 1))  # bias, also uniform in [-1, 1]
+        self.nonlin = nonlin
 
     def __call__(self, x):  # Neuron(nin)(x)
-        # TODO: Calculate w*x + b
-        # TODO: Pass the result through a tanh activation and return it
-        pass
+        """Return ``tanh(w . x + b)`` (or the raw sum if ``nonlin=False``)."""
+        assert len(x) == len(self.w), "input size must match the number of weights"
+        act = self.b
+        for wi, xi in zip(self.w, x):
+            act = act + wi * xi
+        return act.tanh() if self.nonlin else act
 
     def parameters(self):
-        # TODO: Return a list of all parameters (weights + bias)
-        pass
+        """All trainable parameters: the weights followed by the bias."""
+        return self.w + [self.b]
 
     def zero_grad(self):
-        # TODO: Call reset_grad() on all parameters
-        pass
+        """Reset the gradients of this neuron's parameters to zero."""
+        for p in self.parameters():
+            p.reset_grad()
+
+    def __repr__(self):
+        return f"Neuron(nin={len(self.w)}, nonlin={self.nonlin})"
+
 
 class Layer:
-    def __init__(self, nin, nout):
-        # TODO: Initialize a list of `nout` Neurons, each with `nin` inputs
-        pass
+    """A row of ``nout`` neurons, each seeing the same ``nin`` inputs."""
+
+    def __init__(self, nin, nout, nonlin=True):
+        self.neurons = [Neuron(nin, nonlin=nonlin) for _ in range(nout)]
 
     def __call__(self, x):
-        # TODO: Pass input x through all neurons
-        # TODO: Return a single output if nout==1, else return a list of outputs
-        pass
+        """Apply every neuron; collapse to a single Value when ``nout == 1``."""
+        outs = [n(x) for n in self.neurons]
+        return outs[0] if len(outs) == 1 else outs
 
     def parameters(self):
-        # TODO: Return a flattened list of all parameters in all neurons
-        pass
+        """Flattened parameters of all neurons in this layer."""
+        return [p for n in self.neurons for p in n.parameters()]
 
     def zero_grad(self):
-        # TODO: Zero the gradients of all parameters in this layer
-        pass
+        """Zero the gradients of every neuron in this layer."""
+        for n in self.neurons:
+            n.zero_grad()
+
+    def __repr__(self):
+        return f"Layer(nin={len(self.neurons[0].w)}, nout={len(self.neurons)})"
+
 
 class MLP:
+    """A multi-layer perceptron: ``MLP(3, [4, 4, 1])`` -> 3 layers.
+
+    Sizes are read as ``nin -> nouts[0] -> nouts[1] -> ...``.  The hidden
+    layers use ``tanh``; the last layer is linear so the output is not
+    squashed into ``(-1, 1)``.
+    """
+
     def __init__(self, nin, nouts):
-        # TODO: Initialize a sequence of Layers based on the sizes in `nin` and `nouts` list
-        pass
+        sizes = [nin] + list(nouts)
+        self.layers = [
+            Layer(sz, szz, nonlin=(i != len(nouts) - 1))
+            for i, (sz, szz) in enumerate(zip(sizes[:-1], nouts))
+        ]
 
     def __call__(self, x):
-        # TODO: Pass input x sequentially through all layers and return the final output
-        pass
+        """Push the input through every layer in order."""
+        for layer in self.layers:
+            x = layer(x)
+        return x
 
     def parameters(self):
-        # TODO: Return a flattened list of all parameters in all layers
-        pass
+        """Flattened parameters of all layers, in order."""
+        return [p for layer in self.layers for p in layer.parameters()]
 
     def zero_grad(self):
-        # TODO: Zero the gradients of all parameters in the MLP
-        pass
+        """Zero the gradients of every parameter in the network."""
+        for layer in self.layers:
+            layer.zero_grad()
+
+    def __repr__(self):
+        sizes = [len(self.layers[0].neurons[0].w)] + [len(l.neurons) for l in self.layers]
+        return f"MLP({sizes})"
