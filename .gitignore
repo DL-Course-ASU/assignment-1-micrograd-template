@@ -216,3 +216,11 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# --- Assignment 1 local tooling (not part of the submission) ---
+.tools/
+submission.zip
+report/*.log
+report/*.aux
+report/*.out
+report/*.toc
