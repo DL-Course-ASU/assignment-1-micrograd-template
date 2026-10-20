@@ -30,7 +30,7 @@ implementation choices (closure-based backpropagation, set-based parent
 tracking, activation choice, weight initialisation), and present verification
 results: a hand-checked and finite-difference--checked test suite
 (\textbf{42/42 passing}), gradient checks that agree with central differences
-to a relative error of $5.8\times10^{-10}$, and a 337-parameter
+to a maximum relative error of $6.6\times10^{-10}$, and a 337-parameter
 multilayer perceptron trained with hinge loss to \textbf{98.5\%} accuracy on a
 two-moons classification task.
 \end{abstract}
@@ -423,17 +423,23 @@ parameters of 337).}
 \toprule
 Parameter index & Analytic & Numeric & Relative error \\
 \midrule
-29   & $-1.9703\times10^{-3}$ & $-1.9703\times10^{-3}$ & $1.8\times10^{-10}$ \\
-145  & $-1.0000\times10^{-3}$ & $-1.0000\times10^{-3}$ & $2.5\times10^{-10}$ \\
-147  & $\phantom{-}9.9958\times10^{-4}$ & $\phantom{-}9.9958\times10^{-4}$ & $7.0\times10^{-11}$ \\
-218  & $\phantom{-}1.7342\times10^{-3}$ & $\phantom{-}1.7342\times10^{-3}$ & $2.0\times10^{-10}$ \\
-257  & $\phantom{-}1.4557\times10^{-3}$ & $\phantom{-}1.4557\times10^{-3}$ & $1.2\times10^{-10}$ \\
-289  & $\phantom{-}1.4047\times10^{-4}$ & $\phantom{-}1.4047\times10^{-4}$ & $5.8\times10^{-10}$ \\
+29   & $-1.9703\times10^{-3}$ & $-1.9703\times10^{-3}$ & $2.65\times10^{-10}$ \\
+145  & $-1.0000\times10^{-3}$ & $-1.0000\times10^{-3}$ & $7.78\times10^{-11}$ \\
+147  & $\phantom{-}9.9958\times10^{-4}$ & $\phantom{-}9.9958\times10^{-4}$ & $4.17\times10^{-10}$ \\
+218  & $\phantom{-}1.7342\times10^{-3}$ & $\phantom{-}1.7342\times10^{-3}$ & $9.80\times10^{-11}$ \\
+257  & $\phantom{-}1.4557\times10^{-3}$ & $\phantom{-}1.4557\times10^{-3}$ & $4.98\times10^{-12}$ \\
+289  & $\phantom{-}1.4047\times10^{-4}$ & $\phantom{-}1.4047\times10^{-4}$ & $6.55\times10^{-10}$ \\
 \midrule
-\multicolumn{3}{l}{Maximum relative error} & $\mathbf{5.8\times10^{-10}}$ \\
+\multicolumn{3}{l}{Maximum relative error} & $\mathbf{6.55\times10^{-10}}$ \\
 \bottomrule
 \end{tabular}
 \end{table}
+
+\noindent Values are exactly as printed by \texttt{demo.ipynb}. The last
+digits of the relative-error column fluctuate slightly between runs (always
+at machine precision): \texttt{\_prev} is a set, so gradient contributions are
+accumulated in an address-dependent order, and float addition is not
+associative. The analytic and numeric columns agree to every digit shown.
 
 \subsection{Test suite}
 
