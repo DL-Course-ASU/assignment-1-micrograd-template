@@ -30,18 +30,15 @@ class Value:
     """A scalar node in a computational graph with reverse-mode autodiff."""
 
     def __init__(self, data, _children=(), _op='', label=''):
-        self.data = data                      # the scalar value itself
-        self.grad = 0.0                       # d(output)/d(self), 0 until backprop
+        self.data = data
+        self.grad = 0.0
         # local "send grad to children" hook; takes the upstream gradient.
         # Operations overwrite this with a real closure over their operands.
         self._backward = lambda upstream=0.0: None
-        self._prev = set(_children)           # parent nodes that produced this one
-        self._op = _op                        # operator name, for debugging/drawing
-        self.label = label                    # optional human-readable name
+        self._prev = set(_children)
+        self._op = _op
+        self.label = label
 
-    # ------------------------------------------------------------------
-    # helpers
-    # ------------------------------------------------------------------
     def __repr__(self):
         """Debug representation, e.g. ``Value(data=5.0)``."""
         return f"Value(data={self.data})"
@@ -59,120 +56,107 @@ class Value:
         """Set this node's gradient back to zero (call between passes)."""
         self.grad = 0.0
 
-    # ------------------------------------------------------------------
-    # primitive operators (forward + local backward)
-    # ------------------------------------------------------------------
-    def __add__(self, other):  # self + other
+    def __add__(self, other):
         other = self._coerce(other)
         out = Value(self.data + other.data, (self, other), '+')
 
         def _backward(upstream):
-            # d(self)/d(out) = 1 and d(other)/d(out) = 1
             self.grad += upstream
             other.grad += upstream
         out._backward = _backward
         return out
 
-    def __radd__(self, other):  # other + self
+    def __radd__(self, other):
         return self + other
 
-    def __mul__(self, other):  # self * other
+    def __mul__(self, other):
         other = self._coerce(other)
         out = Value(self.data * other.data, (self, other), '*')
 
         def _backward(upstream):
-            # product rule
             self.grad += other.data * upstream
             other.grad += self.data * upstream
         out._backward = _backward
         return out
 
-    def __rmul__(self, other):  # other * self
+    def __rmul__(self, other):
         return self * other
 
-    def __neg__(self):  # -self
+    def __neg__(self):
         return self * -1
 
-    def __sub__(self, other):  # self - other
+    def __sub__(self, other):
         return self + (-other)
 
-    def __rsub__(self, other):  # other - self
+    def __rsub__(self, other):
         return other + (-self)
 
-    def __truediv__(self, other):  # self / other == self * other ** -1
+    def __truediv__(self, other):
         return self * self._coerce(other) ** -1
 
-    def __rtruediv__(self, other):  # other / self
+    def __rtruediv__(self, other):
         return self._coerce(other) * self ** -1
 
-    def __pow__(self, other):  # self ** other
+    def __pow__(self, other):
         # Exponent must be a constant: d(a**k)/da = k * a**(k-1) only holds
         # for a constant k (a Value exponent would need an extra log term).
         assert isinstance(other, (int, float)), "exponent must be a constant int/float"
         out = Value(self.data ** other, (self,), f'**{other}')
 
         def _backward(upstream):
-            # power rule: d(a**k)/da = k * a**(k-1).  For k == 0 the
-            # result is a constant, so the derivative is 0 and we must not
-            # evaluate a ** -1 (which would divide by zero when a == 0).
+            # k == 0 is a constant, so the derivative is 0; skipping it also
+            # avoids evaluating a ** -1 when a == 0.
             if other != 0:
                 self.grad += (other * self.data ** (other - 1)) * upstream
         out._backward = _backward
         return out
 
-    def tanh(self):  # tanh(self)
+    def tanh(self):
         t = math.tanh(self.data)
         out = Value(t, (self,), 'tanh')
 
         def _backward(upstream):
-            # d(tanh x)/dx = 1 - tanh^2(x)
             self.grad += (1.0 - t * t) * upstream
         out._backward = _backward
         return out
 
-    def exp(self):  # e ** self
+    def exp(self):
         e = math.exp(self.data)
         out = Value(e, (self,), 'exp')
 
         def _backward(upstream):
-            # d(e^x)/dx = e^x  (use the local forward value, not out.data,
-            # so the closure does not capture -- and cycle back to -- out)
+            # use the local forward value, not out.data, so the closure does
+            # not capture -- and cycle back to -- out
             self.grad += e * upstream
         out._backward = _backward
         return out
 
-    def relu(self):  # max(0, self) -- optional convenience activation
+    def relu(self):
         out = Value(0.0 if self.data < 0 else self.data, (self,), 'relu')
 
         def _backward(upstream):
-            # derivative is 1 for positive inputs, 0 for negative ones
             self.grad += (self.data > 0) * upstream
         out._backward = _backward
         return out
 
-    def log(self):  # ln(self) -- optional convenience
+    def log(self):
         out = Value(math.log(self.data), (self,), 'log')
 
         def _backward(upstream):
-            # d(ln x)/dx = 1 / x
             self.grad += (1.0 / self.data) * upstream
         out._backward = _backward
         return out
 
-    def sigmoid(self):  # optional convenience activation
+    def sigmoid(self):
         s = 1.0 / (1.0 + math.exp(-self.data)) if self.data >= 0 else \
             math.exp(self.data) / (1.0 + math.exp(self.data))
         out = Value(s, (self,), 'sigmoid')
 
         def _backward(upstream):
-            # sigmoid'(x) = s * (1 - s), written without overflow
             self.grad += (s * (1.0 - s)) * upstream
         out._backward = _backward
         return out
 
-    # ------------------------------------------------------------------
-    # graph traversal
-    # ------------------------------------------------------------------
     def _get_topo(self):
         """Return this node's ancestors in topological (post-order) order.
 
@@ -189,7 +173,7 @@ class Value:
                 visited.add(node)
                 for child in node._prev:
                     build(child)
-                topo.append(node)  # append AFTER visiting children
+                topo.append(node)
         build(self)
         return topo
 
@@ -206,14 +190,10 @@ class Value:
         topo = self._get_topo()
         self.grad = 1.0
         for node in reversed(topo):
-            # hand each node the gradient flowing into it (its out.grad)
             node._backward(node.grad)
 
-    # ------------------------------------------------------------------
-    # numeric coercion
-    # ------------------------------------------------------------------
-    def __int__(self):  # int(self)
+    def __int__(self):
         return int(self.data)
 
-    def __float__(self):  # float(self)
+    def __float__(self):
         return float(self.data)

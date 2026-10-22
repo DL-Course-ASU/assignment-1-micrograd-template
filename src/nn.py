@@ -23,14 +23,11 @@ class Neuron:
     """A single perceptron: ``activation(w . x + b)``."""
 
     def __init__(self, nin, nonlin=True):
-        # Weights: one Value per input, uniform in [-1, 1].  A small random
-        # range keeps initial pre-activations in tanh's linear regime, so
-        # no unit starts saturated (vanishing gradients at step 0).
         self.w = [Value(random.uniform(-1, 1)) for _ in range(nin)]
-        self.b = Value(random.uniform(-1, 1))  # bias, also uniform in [-1, 1]
+        self.b = Value(random.uniform(-1, 1))
         self.nonlin = nonlin
 
-    def __call__(self, x):  # Neuron(nin)(x)
+    def __call__(self, x):
         """Return ``tanh(w . x + b)`` (or the raw sum if ``nonlin=False``)."""
         assert len(x) == len(self.w), "input size must match the number of weights"
         act = self.b
