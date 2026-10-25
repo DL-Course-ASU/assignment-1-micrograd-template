@@ -1,0 +1,672 @@
+% Assignment 1 — MicroGrad report
+% Compile: .tools/tectonic main.tex   (from the repository root)
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{tikz}
+\usetikzlibrary{positioning}
+\usepackage[colorlinks=true,linkcolor=blue!50!black,citecolor=blue!50!black,urlcolor=blue!50!black]{hyperref}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  frame=single,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+  backgroundcolor=\color{black!5}
+}
+
+\title{Assignment 1: A Scalar Autograd Engine and Neural Network API\\
+\large MicroGrad from scratch --- design, derivations and results}
+\author{CSE485/CSE488 Deep Learning, Ain Shams University}
+\date{\today}
+
+\newcommand{\dd}{\,\mathrm{d}}
+\newcommand{\vect}[1]{\mathbf{#1}}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This report documents the design and verification of a scalar automatic
+differentiation engine (\texttt{src/engine.py}) and a small neural-network API
+(\texttt{src/nn.py}) implemented from scratch in Python, without PyTorch or any
+other autodiff library. We derive every local backward rule by hand, explain
+reverse-mode autodiff and the role of the topological sort, and justify the
+implementation choices (closure-based backpropagation, set-based parent
+tracking, activation choice, weight initialisation, constant-exponent power).
+Verification is presented at three levels: the official test suite
+(\textbf{12/12 passing}), a hand-derived sanity check, and a finite-difference
+gradient check over a trained model whose analytic gradients agree with central
+differences to a maximum relative error of $2.96\times10^{-9}$. As an end-to-end
+demonstration, a 337-parameter multilayer perceptron trained with mean squared
+error and mini-batch SGD reaches \textbf{97.5\%} accuracy on a two-moons
+classification task.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+\section{Overview and architecture}
+
+The assignment consists of two modules plus their verification material:
+
+\begin{center}
+\begin{tabular}{@{}ll@{}}
+\toprule
+\textbf{File} & \textbf{Role} \\
+\midrule
+\texttt{src/engine.py} & \texttt{Value}: scalar node with reverse-mode autodiff \\
+\texttt{src/nn.py} & \texttt{Neuron}, \texttt{Layer}, \texttt{MLP} ---
+                      PyTorch-like forward API \\
+\texttt{tests/} & 12 official tests (\texttt{pytest}) \\
+\texttt{demo.ipynb} & reproducible training run, plots, gradient check \\
+\texttt{report/} & this LaTeX report and its figures \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+A \texttt{Value} stores a scalar \texttt{data} together with the computational
+graph that produced it (\texttt{\_prev} / \texttt{\_op}), a running gradient
+\texttt{grad}, and a \texttt{\_backward} closure implementing its local
+derivative. Every operation returns a fresh output node whose
+\texttt{\_backward} closure knows nothing but the operands immediately below
+it; calling \texttt{Value.backward} walks the whole graph once in reverse
+topological order and applies the chain rule, so each node ends up holding
+$\partial L/\partial(\text{node})$.
+
+Two properties of the representation do most of the work:
+
+\begin{itemize}
+  \item \textbf{Graph capture for free.} Because Python evaluates
+    \texttt{a * b} before calling \texttt{\_\_mul\_\_}, the operation can hand
+    its inputs to the output node as children (\texttt{(self, other)}) without
+    any explicit tracing or tape. Building the forward pass \emph{is} building
+    the graph.
+  \item \textbf{Two-phase evaluation.} The forward pass only writes
+    \texttt{data}; the backward pass only reads \texttt{data} and writes
+    \texttt{grad}. No value read during differentiation can be clobbered by
+    the differentiation itself.
+\end{itemize}
+
+\section{The chain rule and reverse-mode autodiff}
+
+Let the loss be a composition of local functions
+\begin{equation}
+  L = f_k \circ f_{k-1} \circ \cdots \circ f_1,
+  \label{eq:chain}
+\end{equation}
+so that for an input $x_i$ sitting under many intermediate values,
+\begin{equation}
+  \frac{\dd L}{\dd x_i}
+  = \sum_{\text{paths } p:\, x_i \to L}
+    \prod_{e \in p} \frac{\partial \text{head}_e}{\partial \text{tail}_e}.
+  \label{eq:paths}
+\end{equation}
+
+Equation~\eqref{eq:paths} is a \emph{sum over paths}, which is exactly why
+gradients must be accumulated rather than assigned (Section~\ref{sec:diamond}).
+
+\textbf{Reverse mode} seeds $\partial L/\partial L = 1$ and propagates
+\emph{downwards}, multiplying by one local derivative per edge. Its cost is one
+multiply--add per edge, independent of how many inputs $x_i$ there are; forward
+mode would cost one sweep per input. Deep networks have millions of parameters
+and exactly one scalar loss, so reverse mode is the only practical choice ---
+the same reason PyTorch uses it.
+
+\subsection{Local derivatives (derived by hand)}
+
+Each operation needs only its own derivative; the chain rule composes them.
+
+\paragraph{Addition.} $c = a + b$ with $a,b$ scalars:
+\[
+  \frac{\partial c}{\partial a} = 1,
+  \qquad
+  \frac{\partial c}{\partial b} = 1.
+\]
+The gradient is passed through unchanged to both parents.
+
+\paragraph{Multiplication.} $c = a \cdot b$:
+\[
+  \frac{\partial c}{\partial a} = b,
+  \qquad
+  \frac{\partial c}{\partial b} = a.
+\]
+Each parent's share of the gradient is scaled by the \emph{other} operand's
+forward value --- which is why forward values must be retained.
+
+\paragraph{Power.} $c = a^{k}$, $k$ a constant:
+\[
+  \frac{\partial c}{\partial a} = k\,a^{k-1}.
+\]
+This holds only for constant $k$; a \texttt{Value} exponent would additionally
+contribute $a^{k}\ln a \cdot \partial k/\partial a$, which the local rule does
+not model. The implementation therefore asserts
+\texttt{isinstance(other, (int, float))} and fails fast rather than returning a
+silently wrong gradient.
+
+\paragraph{Tanh.} $t = \tanh(a)$, with the forward value $t$ already computed:
+\[
+  \frac{\partial t}{\partial a} = 1 - \tanh^2(a) = 1 - t^2.
+\]
+Reusing $t$ means no transcendental function is evaluated in the backward pass.
+
+\paragraph{Exp.} $e = \exp(a)$:
+\[
+  \frac{\partial e}{\partial a} = \exp(a) = e.
+\]
+Again the forward value is the derivative, so the backward pass is a copy.
+
+The remaining operators are \emph{derived}, not primitive: subtraction,
+division and negation are expressed through the rules above,
+\[
+  -a \equiv a \cdot (-1), \qquad
+  a - b \equiv a + (-b), \qquad
+  a / b \equiv a \cdot b^{-1},
+\]
+so a single addition rule and a single multiplication rule cover all five.
+
+\section{Topological sort and the backward pass}
+
+\subsection{Why a topological order is required}
+
+A node may only be backpropagated through \emph{after} every consumer of its
+gradient has contributed. If we pushed a partial gradient into
+\texttt{a.grad} and ran \texttt{a}'s backward rule immediately, that rule would
+multiply the incomplete value by a local derivative, and later contributions
+from other paths would be scaled incorrectly. A topological order guarantees
+that when a node is processed, \texttt{grad} already holds its final value.
+
+\subsection{Why post-order (append after the children loop)}
+
+\texttt{\_get\_topo} is a depth-first search that appends a node \emph{after}
+recursing into all of its children (post-order). Post-order therefore lists
+every node \emph{after} its dependencies, i.e.\ children before parents. The
+backward pass then simply walks that list in reverse, starting from the output:
+
+\begin{lstlisting}
+def backward(self):
+    topo = self._get_topo()
+    self.grad = 1.0
+    for n in reversed(topo):
+        n._backward()
+\end{lstlisting}
+
+Seeding the root with \texttt{self.grad = 1.0} encodes
+$\partial L/\partial L = 1$. It also means calling \texttt{.backward()} on an
+\emph{intermediate} node yields that node's gradient with respect to the
+inputs, which is what makes intermediate-value tests possible.
+
+\subsection{Worked example}
+
+Take $a = -2$, $b = 3$,
+\[
+  d = a\cdot b,\qquad e = a + b,\qquad f = d \cdot e,
+\]
+so $f = ab(a+b) = a^2 b + a b^2$ and
+\[
+  \frac{\partial f}{\partial a} = 2ab + b^2 = 2(-2)(3) + 9 = -3,
+  \qquad
+  \frac{\partial f}{\partial b} = a^2 + 2ab = 4 + 2(-2)(3) = -8.
+\]
+The graph has the shape
+\begin{center}
+\begin{tikzpicture}[>=stealth, every node/.style={font=\small}]
+  \node (a) {$a$};
+  \node (b) [right=1.6cm of a] {$b$};
+  \node (d) [above right=0.9cm and 0.4cm of a] {$d=a\!\cdot\! b$};
+  \node (e) [below right=0.9cm and 0.4cm of a] {$e=a\!+\! b$};
+  \node (f) [right=1.4cm of d] {$f = d \cdot e$};
+  \draw[->] (a) -- (d); \draw[->] (b) -- (d);
+  \draw[->] (a) -- (e); \draw[->] (b) -- (e);
+  \draw[->] (d) -- (f); \draw[->] (e) -- (f);
+\end{tikzpicture}
+\end{center}
+Post-order DFS gives \texttt{[a, b, d, e, f]}; reversed, the backward sweep
+processes $f \to e \to d \to b \to a$, and each node's \texttt{grad} is final
+when it is reached. This is precisely the template test
+\texttt{test\_chain\_rule\_and\_backprop} in \texttt{tests/test\_engine.py}.
+
+\section{The diamond graph: \texttt{visited} and \texttt{+=}}
+\label{sec:diamond}
+
+\subsection{Why the \texttt{visited} set}
+
+Real graphs share nodes: $a$ feeds $d$ and $e$, and $d,e$ both feed $f$. Two
+things go wrong without bookkeeping:
+
+\begin{enumerate}
+  \item \textbf{Repeated work.} Without a set, $a$ is re-explored once per path
+    reaching it --- exponential in graph depth.
+  \item \textbf{Duplicate list entries.} $a$ would be appended to \texttt{topo}
+    several times, so \texttt{backward} would run its closure several times and
+    push gradient through it several times.
+\end{enumerate}
+
+\texttt{visited} (a \texttt{set}) is checked \emph{before} recursing, so each
+node is appended exactly once. A \texttt{set} also matches the semantics of
+\texttt{\_prev}: a node that appears twice in one expression, as in $a + a$,
+is one parent, not two independent ones.
+
+\subsection{Why \texttt{+=} and not \texttt{=}}
+
+Let $a = 3$, $c = a + a$, $d = c \cdot a$. Then
+$d = 2a \cdot a = 2a^2$ and $\dd d/\dd a = 4a = 12$.
+
+Tracing by hand:
+\begin{itemize}
+  \item $d$'s rule pushes $a$'s \emph{direct} contribution $c = 6$;
+  \item $c$'s rule pushes its gradient ($= a = 3$) into $a$ \emph{twice},
+    because both operands are $a$: $+3$ and $+3$.
+\end{itemize}
+Total $6 + 3 + 3 = 12$. \checkmark
+
+With assignment, whichever write executes last wins and the other contributions
+vanish, yielding a wrong number that depends on evaluation order. Since
+Equation~\eqref{eq:paths} is a sum over \emph{all} paths, so accumulation is
+not an optimisation --- it is the chain rule.
+
+The template test
+\texttt{test\_gradient\_accumulation\_diamond\_graph}
+asserts precisely this behaviour.
+
+\section{Design justifications}
+\label{sec:design}
+
+\paragraph{Why closures instead of an operator dispatch table?}
+Each operation already knows its operands at construction time, so a closure
+captures them directly: no string-to-function lookup on \texttt{\_op}, no
+re-derivation during the backward pass, and the backward rule lives next to the
+forward rule it belongs to. \texttt{\_op} and \texttt{label} remain purely
+diagnostic.
+
+\paragraph{Why \texttt{\_prev} is a \texttt{set}?}
+Parents are shared arbitrarily; a set deduplicates them for the topological
+walk and gives the natural semantics for repeated operands ($a+a$ has one
+parent). It also keeps \texttt{out} hashable-by-identity in \texttt{visited}.
+
+\paragraph{Why is \texttt{grad} initialised to \texttt{0.0}?}
+It makes ``no effect yet'' the default, so \texttt{+=} works from a clean slate
+and a gradient that is never written reads as zero rather than \texttt{None}.
+\texttt{reset\_grad()} restores this state; \texttt{nn.py} exposes it as
+\texttt{zero\_grad()} on the model, mirroring PyTorch and keeping optimisation
+steps independent of each other.
+
+\paragraph{Why uniform weights in $[-1,1]$?}
+Initial pre-activations stay inside \texttt{tanh}'s near-linear region
+($1-\tanh^2 \approx 1$), so units are not born saturated and can learn from the
+first step. Random values also break the symmetry that would otherwise make
+every unit in a layer compute identical features.
+
+\paragraph{Why \texttt{tanh} rather than sigmoid?}
+Outputs are zero-centred in $(-1,1)$, which gives better-conditioned gradients
+for the next layer, and the derivative $1-t^2$ reuses the forward value. The
+cost is saturation: a confidently wrong unit has near-zero gradient (visible
+directly in Section~\ref{sec:results}).
+
+\paragraph{Why is the power exponent restricted?}
+Covered in Section 3.1: the rule $k a^{k-1}$ is only correct for constant $k$,
+so an assert converts a silent wrong answer into a loud correct one.
+
+\paragraph{Why no dependency on NumPy inside \texttt{src/}?}
+The point of the exercise is to internalise computational graphs, local
+derivatives, topological ordering and accumulation rather than to obtain
+gradients from a library. NumPy appears only in \texttt{demo.ipynb}, for dataset
+generation and plotting.
+
+\section{The neural-network API}
+\label{sec:nn}
+
+\subsection{Neuron, Layer, MLP}
+
+\begin{lstlisting}
+class Neuron:
+    def __init__(self, nin):
+        self.w = [Value(random.uniform(-1, 1)) for _ in range(nin)]
+        self.b = Value(random.uniform(-1, 1))
+
+    def __call__(self, x):
+        act = self.b
+        for wi, xi in zip(self.w, x):
+            act += wi * xi
+        return act.tanh()
+\end{lstlisting}
+
+A neuron computes the affine form $z = \sum_i w_i x_i + b$ as a chain of
+\texttt{Value} operations and squashes it:
+\[
+  h = \tanh\!\Big(\sum_{i=1}^{n} w_i x_i + b\Big).
+\]
+Because the forward pass is written with ordinary operators, the whole network
+is a computational graph on which \texttt{backward()} already works --- the
+engine needs no knowledge of neural networks at all.
+
+\texttt{Layer} holds \texttt{nout} neurons over the same \texttt{nin} inputs and
+returns a list, collapsing to a bare \texttt{Value} when \texttt{nout == 1};
+\texttt{MLP} chains layers, feeding the outputs of layer $j$ into layer $j+1$.
+
+Parameter accounting for the demo model
+\texttt{MLP(2, [16, 16, 1])}:
+\[
+  \underbrace{(2+1)\cdot 16}_{48} +
+  \underbrace{(16+1)\cdot 16}_{272} +
+  \underbrace{(16+1)\cdot 1}_{17} = 337,
+\]
+where each $+1$ accounts for a bias. \texttt{parameters()} flattens the layers
+in order, so the 337-element list and the notebook's parameter indices line up
+one-to-one; \texttt{zero\_grad()} walks the same list.
+
+\subsection{Loss and optimisation}
+
+The demo minimises \textbf{mean squared error} between the network score
+$s_i \in (-1,1)$ and the label $y_i \in \{-1,+1\}$:
+\begin{equation}
+  L = \frac{1}{N} \sum_{i=1}^{N} (s_i - y_i)^2.
+  \label{eq:mse}
+\end{equation}
+Equation~\eqref{eq:mse} is built from \texttt{Value} operators only --- a
+difference, a product, an accumulation and a scalar multiply --- so its
+gradient flows back into every weight with no special-cased code.
+
+Training is mini-batch SGD (batch size 20), with the update performed
+\emph{after each batch}:
+\begin{equation}
+  p \leftarrow p - \eta \frac{\partial L_{\text{batch}}}{\partial p},
+  \qquad \eta \leftarrow 0.98\,\eta \ \text{per epoch},
+  \qquad \eta_0 = 0.1 .
+\end{equation}
+A step sequence per iteration is
+\texttt{model.zero\_grad()} $\to$ \texttt{loss.backward()} $\to$
+\texttt{p.data -= lr * p.grad}. Gradients are never stored across steps.
+
+\section{Verification}
+\label{sec:verify}
+
+\subsection{Hand-derived sanity check}
+
+The notebook opens with a two-variable expression whose gradients are derived
+on paper: $f(a,b) = a\cdot b + \tanh(a)$, giving
+$\partial f/\partial a = b + 1 - \tanh^2(a)$ and
+$\partial f/\partial b = a$. With $a = 0.5$, $b = -2$:
+
+\begin{center}
+\begin{tabular}{@{}lrr@{}}
+\toprule
+Quantity & Engine & Hand-derived \\
+\midrule
+$f$          & $-0.537883$ & --- \\
+$\partial f/\partial a$ & $-1.213552$ & $-1.213552$ \\
+$\partial f/\partial b$ & $0.500000$  & $0.500000$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Both gradients match to $10^{-9}$.
+
+\subsection{Gradient checking}
+
+After training, analytic gradients are compared against central differences,
+\begin{equation}
+  \frac{\partial L}{\partial p}
+  \approx \frac{L(p+h) - L(p-h)}{2h},
+  \qquad h = 10^{-5},
+  \label{eq:fd}
+\end{equation}
+for six randomly selected parameters of the trained model, recomputing the full
+mean-squared-error loss with the parameter nudged each time. The relative error
+is reported as
+\begin{equation*}
+  \frac{\bigl|g_{\text{analytic}} - g_{\text{numeric}}\bigr|}
+       {\max\bigl(10^{-8},\ |g_{\text{analytic}}| + |g_{\text{numeric}}|\bigr)}.
+\end{equation*}
+
+\begin{center}
+\begin{tabular}{@{}rrrr@{}}
+\toprule
+Parameter index & Analytic & Central difference & Relative error \\
+\midrule
+69   & $0.00906473$  & $0.00906473$   & $6.54\times10^{-11}$ \\
+130  & $0.00278148$  & $0.00278148$   & $3.91\times10^{-10}$ \\
+265  & $-0.00210914$ & $-0.00210914$  & $2.90\times10^{-11}$ \\
+278  & $-0.00187257$ & $-0.00187257$  & $1.65\times10^{-10}$ \\
+295  & $-0.00028168$ & $-0.00028168$  & $2.96\times10^{-9}$  \\
+316  & $0.00047361$  & $0.00047361$   & $3.64\times10^{-10}$ \\
+\midrule
+\multicolumn{3}{r}{\textbf{Maximum relative error}} &
+  $\mathbf{2.96\times10^{-9}}$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Agreement at the $10^{-9}$ level confirms the backward rules, the topological
+order and the accumulation logic simultaneously --- an error in any one of them
+would show up as a discrepancy orders of magnitude larger. The notebook asserts
+a threshold of $10^{-4}$, which is met with four orders of margin.
+
+\subsection{Test suite: 12/12}
+
+\begin{center}
+\begin{tabular}{@{}lp{7.4cm}@{}}
+\toprule
+\textbf{Test} & \textbf{Covers} \\
+\midrule
+\texttt{test\_value\_initialization} & \texttt{data}, \texttt{grad = 0.0},
+  \texttt{label}, \texttt{\_\_repr\_\_} \\
+\texttt{test\_basic\_operations} & add, radd, mul, rmul, sub, div, neg \\
+\texttt{test\_type\_errors} & \texttt{TypeError} on \texttt{+} with a string,
+  \texttt{*} with a list \\
+\texttt{test\_power} & $a^3 \Rightarrow 12$; \texttt{AssertionError} on a
+  \texttt{Value} exponent \\
+\texttt{test\_activations\_and\_exp} & \texttt{tanh} at 0, \texttt{exp} at 0
+  with gradients \\
+\texttt{test\_gradient\_accumulation\_diamond\_graph} & $d=(a+a)\cdot a
+  \Rightarrow 12$; catches \texttt{=} instead of \texttt{+=} \\
+\texttt{test\_chain\_rule\_and\_backprop} & composite graph:
+  $\partial f/\partial a = -3$, $\partial f/\partial b = -8$ \\
+\texttt{test\_edge\_case\_division\_by\_zero} & \texttt{ZeroDivisionError} \\
+\texttt{test\_type\_casting} & \texttt{\_\_int\_\_}, \texttt{\_\_float\_\_} \\
+\texttt{test\_neuron} & parameter shapes, tanh range, output \\
+\texttt{test\_layer} & sizes, list output, parameter count \\
+\texttt{test\_mlp} & depth, parameter count, scalar output \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{lstlisting}[frame=none]
+$ python -m pytest
+
+............                                                   [100%]
+12 passed in 0.01s
+\end{lstlisting}
+
+\section{Experimental results}
+\label{sec:results}
+
+The demo trains \texttt{MLP(2, [16, 16, 1])} on a two-moons dataset generated
+in-notebook (200 samples, Gaussian noise $\sigma = 0.15$, labels
+$\pm 1$, seed 42) --- no scikit-learn dependency.
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.52\textwidth]{figures/dataset.png}
+  \caption{The two-moons dataset: 200 samples with Gaussian noise
+    $\sigma = 0.15$, balanced between the two classes.}
+  \label{fig:dataset}
+\end{figure}
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.98\textwidth]{figures/learning_curves.png}
+  \caption{Left: mean squared error per epoch. Right: training accuracy.
+    Both are monotone after the model escapes the initial plateau.}
+  \label{fig:curves}
+\end{figure}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}rrrr@{}}
+\toprule
+Epoch & Loss & Accuracy & Learning rate \\
+\midrule
+0  & $2.0090$ & $50.0\%$ & $0.0980$ \\
+10 & $1.9966$ & $50.0\%$ & $0.0801$ \\
+20 & $0.2109$ & $93.0\%$ & $0.0654$ \\
+30 & $0.1316$ & $96.0\%$ & $0.0535$ \\
+40 & $0.0805$ & $97.5\%$ & $0.0437$ \\
+49 & $0.0693$ & $97.5\%$ & $0.0364$ \\
+\bottomrule
+\end{tabular}
+\caption{Training log (selected epochs) from the executed notebook.}
+\end{table}
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.68\textwidth]{figures/decision_boundary.png}
+  \caption{Decision boundary of the trained network. The black contour
+    $s(x)=0$ separates the two arcs and tracks them closely.}
+  \label{fig:boundary}
+\end{figure}
+
+\paragraph{The plateau is \texttt{tanh} saturation.}
+The loss sits at $\approx 2.0$ for the first $\sim$15 epochs while accuracy
+stays at chance level ($50\%$). This is not a bug: with $\tanh$ outputs and
+targets $\pm 1$, a wrongly-signed unit starts saturated, and its derivative
+$1-t^2$ is then $\approx 0$, so it receives almost no gradient. The plateau
+ends when accumulated mini-batch updates move the pre-activations back into the
+responsive region --- visible as the cliff between epochs 15 and 20
+(Figure~\ref{fig:curves}). Mini-batches (rather than one full-batch step per
+epoch) and the decaying learning rate are what make that escape happen in
+reasonable wall-clock time.
+
+\paragraph{Outcome.}
+Loss falls from $2.0090$ to $0.0693$ while accuracy rises from $48\text{--}50\%$
+(random) to \textbf{97.5\%}; the boundary in Figure~\ref{fig:boundary} follows
+both arcs. Accuracy flattens at $97.5\%$ while loss keeps dropping, because MSE
+on a bounded $\tanh$ output keeps refining scores on already-correct points
+rather than flipping classifications.
+
+\paragraph{Cost.}
+The engine is pure Python: 50 epochs of 200 points (10 batches each) take
+roughly a minute, and the $60\times60$ boundary grid costs about 6 seconds of
+\texttt{Value} forward passes. This is the expected price of a scalar engine
+and is not a concern at this scale.
+
+\section{Answers to the conceptual questions}
+\label{sec:questions}
+
+The template repository does not list explicit questions; the set below covers
+the concepts the assignment description emphasises (chain rule, reverse mode,
+topological sorting, diamonds, design choices, NN API). Additional questions
+published on the LMS should be appended here.
+
+\begin{enumerate}
+  \item \textbf{Why does the gradient flow from the output to the inputs?}
+    Because $L$ is a composition of local functions; Eq.~\eqref{eq:chain} is a
+    recursion from $L$ downwards. Seeding $\partial L/\partial L = 1$ and
+    visiting nodes in reverse topological order evaluates that recursion once,
+    giving every parameter's gradient in a single $\mathcal{O}(|V|)$ sweep.
+
+  \item \textbf{Why is a topological sort needed, and why post-order?}
+    A node may only be backpropagated through after all consumers of its
+    gradient have contributed; otherwise it would push an incomplete gradient.
+    Post-order DFS lists every node after its dependencies, so reversing that
+    list gives a valid processing order starting from the output.
+
+  \item \textbf{Why the \texttt{visited} set?}
+    DAGs share nodes. Without it a shared node is re-explored once per path
+    (exponential in depth) and appended to the topo list multiple times, so its
+    outgoing gradient is applied several times. See Section~\ref{sec:diamond}.
+
+  \item \textbf{Why must local backward rules use \texttt{+=}?}
+    Because a node can receive gradient from several parents, and from several
+    operands of the same operation as in $a+a$; Eq.~\eqref{eq:paths} is a
+    \emph{sum} over paths. Assignment lets the last path overwrite the earlier
+    ones: for $d=(a+a)\cdot a$ at $a=3$ we would not obtain $12$.
+
+  \item \textbf{Why seed the root's gradient with \texttt{1.0}?}
+    We differentiate $L$ with respect to itself, $\partial L/\partial L = 1$;
+    everything else follows from the chain rule. Seeding an intermediate node
+    instead yields that node's gradient with respect to the inputs, which is
+    what makes intermediate-value tests possible.
+
+  \item \textbf{What would change for a vector-valued output?}
+    Reverse mode gives one output's gradient per sweep; a Jacobian with $m$
+    outputs needs $m$ backward passes (or a framework with vector--Jacobian
+    products). Training keeps a scalar loss precisely so one pass suffices.
+
+  \item \textbf{Why is \texttt{pow} restricted to constant exponents?}
+    $\partial_a a^{k} = k a^{k-1}$ holds only for constant $k$; a
+    \texttt{Value} exponent would add $a^{k}\ln a \cdot \partial k/\partial a$,
+    which the local rule does not implement. An assertion fails fast instead of
+    returning a silently wrong gradient.
+
+  \item \textbf{Why uniform weights in $[-1,1]$?}
+    Keeps initial pre-activations in \texttt{tanh}'s linear region
+    ($1-\tanh^{2} \approx 1$) so every unit can learn from step 1, and
+    random values break unit symmetry. See Section~\ref{sec:design}.
+
+  \item \textbf{Why \texttt{tanh} instead of sigmoid?}
+    Zero-centred outputs in $(-1,1)$ give better-conditioned gradients for
+    downstream layers, and the derivative $1-t^{2}$ reuses the forward value.
+    The trade-off is saturation, which the demo's initial plateau illustrates
+    directly.
+
+  \item \textbf{How does this compare to PyTorch?}
+    PyTorch follows the same two-phase protocol (record the graph in forward,
+    walk it in reverse) but on tensors with fused C++/CUDA kernels, a dynamic
+    autograd graph rebuilt each iteration, and \texttt{Tensor.grad}
+    accumulation semantically identical to our \texttt{+=}. Our \texttt{Value}
+    is the scalar special case of a \texttt{Tensor}.
+
+  \item \textbf{Why is NumPy/PyTorch not allowed here?}
+    The point is to internalise the mechanics --- computational graphs, local
+    derivatives, topological ordering, accumulation --- rather than to obtain
+    gradients from a library. NumPy appears in the notebook only for dataset
+    generation and plotting, never inside \texttt{src/}.
+\end{enumerate}
+
+\section{Reproducibility}
+
+\begin{lstlisting}
+# tests
+python -m pytest                 # 12 passed
+
+# demo: execute every cell top to bottom and rewrite the figures
+jupyter nbconvert --to notebook --execute --inplace demo.ipynb
+
+# report
+.tools/tectonic main.tex
+\end{lstlisting}
+
+Everything the results depend on is pinned:
+
+\begin{itemize}
+  \item \textbf{Seeds} --- \texttt{random.seed(42)}, \texttt{numpy.random.seed(42)}
+    and \texttt{default\_rng(42)} are set at the top of the notebook, before any
+    model construction or data generation.
+  \item \textbf{Data} --- the dataset is generated in-notebook, so no external
+    file or download is involved.
+  \item \textbf{No hidden state} --- the notebook runs start to finish with no
+    manual intervention; its execution counts run $1 \to 17$ in order with no
+    warnings and no errors.
+  \item \textbf{Figures} --- \texttt{report/figures/*.png} are written by the
+    notebook itself, so the report and the notebook cannot silently drift apart.
+\end{itemize}
+
+\section{Conclusion}
+
+A scalar autograd engine of roughly one hundred lines is enough to train a
+small network from scratch: local derivatives in closures, a post-order
+topological sort for sequencing, and \texttt{+=} accumulation for the sum over
+paths. The three levels of verification --- 12/12 tests, a hand-derived sanity
+check, and finite differences agreeing to $2.96\times10^{-9}$ --- each catch a
+different class of error, and the end-to-end run reaches 97.5\% accuracy on the
+two-moons task, including a case study of activation saturation.
+
+\end{document}
