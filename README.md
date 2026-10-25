@@ -85,4 +85,4 @@ When you open or push updates to your Pull Request:
 1. GitHub Actions will automatically run `pytest` against your code.
 2. An automated bot will comment on your PR with a detailed breakdown of your test results.
 3. Your score (formatted as `Passed/Total`, e.g., `12/12 PASSED`) will automatically sync with the course gradebook.
-4. **Re-submissions:** You can push updates to your branch as many times as you like before the deadline. Each push will **override** your previous score with your latest attempt.
+4. **Re-submissions:** You can push updates to your branch as many times as you like before the deadline. Each push will **override** your previous score with your latest attempt

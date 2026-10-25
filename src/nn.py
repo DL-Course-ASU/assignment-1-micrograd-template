@@ -1,56 +1,90 @@
+
 import random
 from src.engine import Value
 
-class Neuron:
-    def __init__(self, nin):
-        # TODO: Initialize weights (w) as a list of Value objects (random uniform -1 to 1)
-        # TODO: Initialize bias (b) as a Value object (random uniform -1 to 1)
-        pass
-
-    def __call__(self, x):  # Neuron(nin)(x)
-        # TODO: Calculate w*x + b
-        # TODO: Pass the result through a tanh activation and return it
-        pass
-
-    def parameters(self):
-        # TODO: Return a list of all parameters (weights + bias)
-        pass
+class Module:
+    """Base class for neural network modules."""
 
     def zero_grad(self):
-        # TODO: Call reset_grad() on all parameters
-        pass
+        for p in self.parameters():
+            p.grad = 0.0
 
-class Layer:
-    def __init__(self, nin, nout):
-        # TODO: Initialize a list of `nout` Neurons, each with `nin` inputs
-        pass
+    def parameters(self):
+        return []
+
+
+class Neuron(Module):
+    """A single neuron with weights, bias, and optional activation."""
+
+    def __init__(self, nin, nonlin=True):
+        self.w = [Value(random.uniform(-1, 1)) for _ in range(nin)]
+        self.b = Value(0.0)
+        self.nonlin = nonlin
 
     def __call__(self, x):
-        # TODO: Pass input x through all neurons
-        # TODO: Return a single output if nout==1, else return a list of outputs
-        pass
+        act = sum((wi * xi for wi, xi in zip(self.w, x)), self.b)
+        return act.tanh() if self.nonlin else act
 
     def parameters(self):
-        # TODO: Return a flattened list of all parameters in all neurons
-        pass
+        return self.w + [self.b]
 
-    def zero_grad(self):
-        # TODO: Zero the gradients of all parameters in this layer
-        pass
+    def __repr__(self):
+        activation = "Tanh" if self.nonlin else "Linear"
+        return f"{activation}Neuron({len(self.w)})"
 
-class MLP:
+
+class Layer(Module):
+    """A layer containing multiple neurons."""
+
+    def __init__(self, nin, nout, **kwargs):
+        self.neurons = [
+            Neuron(nin, **kwargs) for _ in range(nout)
+        ]
+
+    def __call__(self, x):
+        out = [neuron(x) for neuron in self.neurons]
+        return out[0] if len(out) == 1 else out
+
+    def parameters(self):
+        return [
+            p
+            for neuron in self.neurons
+            for p in neuron.parameters()
+        ]
+
+    def __repr__(self):
+        return f"Layer of [{', '.join(str(n) for n in self.neurons)}]"
+
+
+class MLP(Module):
+    """A multilayer perceptron."""
+
     def __init__(self, nin, nouts):
-        # TODO: Initialize a sequence of Layers based on the sizes in `nin` and `nouts` list
-        pass
+        if nin < 1 or not nouts or any(n < 1 for n in nouts):
+            raise ValueError("Layer sizes must be positive integers.")
+
+        sizes = [nin] + list(nouts)
+
+        self.layers = [
+            Layer(
+                sizes[i],
+                sizes[i + 1],
+                nonlin=(i != len(nouts) - 1)
+            )
+            for i in range(len(nouts))
+        ]
 
     def __call__(self, x):
-        # TODO: Pass input x sequentially through all layers and return the final output
-        pass
+        for layer in self.layers:
+            x = layer(x)
+        return x
 
     def parameters(self):
-        # TODO: Return a flattened list of all parameters in all layers
-        pass
+        return [
+            p
+            for layer in self.layers
+            for p in layer.parameters()
+        ]
 
-    def zero_grad(self):
-        # TODO: Zero the gradients of all parameters in the MLP
-        pass
+    def __repr__(self):
+        return f"MLP of [{', '.join(str(layer) for layer in self.layers)}]"
