@@ -1,0 +1,41 @@
+{
+  "seed": 7,
+  "data_seed": 23,
+  "epochs": 600,
+  "learning_rate": 0.1,
+  "train_samples": 48,
+  "test_samples": 24,
+  "max_gradient_error": 2.459243919616938e-11,
+  "models": {
+    "Single neuron": {
+      "parameters": 3,
+      "initial_mse": 1.2307724110785707,
+      "train": {
+        "mse": 1.0137358791721682,
+        "accuracy": 0.75
+      },
+      "test": {
+        "mse": 1.013164776050021,
+        "accuracy": 0.75
+      }
+    },
+    "MLP (2-4-1)": {
+      "parameters": 17,
+      "initial_mse": 1.363100404209127,
+      "train": {
+        "mse": 0.004055342883515569,
+        "accuracy": 1.0
+      },
+      "test": {
+        "mse": 0.0033869873818071963,
+        "accuracy": 1.0
+      }
+    }
+  },
+  "exact_xor_predictions": [
+    -0.9497435583100642,
+    0.9680392232197323,
+    0.9582021557880999,
+    -0.9521194158146514
+  ]
+}
