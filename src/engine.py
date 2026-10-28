@@ -10,70 +10,106 @@ class Value:
         self.label = label
 
     def __repr__(self):
-        # TODO: Return string representation, e.g., "Value(data=...)"
-        pass
+        return f"Value(data={self.data})"
+
+    @staticmethod
+    def _wrap(other):
+        if isinstance(other, Value):
+            return other
+        if isinstance(other, (int, float)):
+            return Value(other)
+        raise TypeError(f"unsupported operand type for Value: {type(other).__name__}")
 
     def __add__(self, other):  # self + other
-        # TODO: Handle both Value and scalar inputs
-        # TODO: Return new Value and implement _backward
-        pass
+        other = Value._wrap(other)
+        out = Value(self.data + other.data, (self, other))
+        def _backward():
+            self.grad += out.grad * 1
+            other.grad += out.grad * 1
+        out._backward = _backward
+        return out
 
-    def __radd__(self, other):  # other + self
-        # TODO: Implement reverse addition
-        pass
+    def __radd__(self, other):
+        return self + other
 
     def __mul__(self, other):  # self * other
-        # TODO: Handle both Value and scalar inputs
-        # TODO: Return new Value and implement _backward using product rule
-        pass
+        other = Value._wrap(other)
+        out = Value(self.data * other.data, (self, other))
+        def _backward():
+            self.grad += out.grad * other.data
+            other.grad += out.grad * self.data
+        out._backward = _backward
+        return out
 
     def __rmul__(self, other):  # other * self
-        # TODO: Implement reverse multiplication
-        pass
+        return self * other
 
     def __neg__(self):  # -self
-        # TODO: Implement negation
-        pass
+        out = Value(-self.data, (self,))
+        def _backward():
+            self.grad += out.grad* -1
+        out._backward = _backward
+        return out
 
     def __sub__(self, other):  # self - other
-        # TODO: Implement subtraction
-        pass
+        return self + (-Value._wrap(other))
 
     def __truediv__(self, other):  # self / other
-        # TODO: Implement division using self * other**-1
-        pass
+        return self * Value._wrap(other) ** -1
 
     def __pow__(self, other):  # self ** other
-        # TODO: Assert other is int or float
-        # TODO: Return new Value and implement _backward using power rule
-        pass
+        assert isinstance(other, (int, float)), "only int/float powers are supported"
+        out = Value(self.data ** other, (self,))
+        def _backward():
+            self.grad += out.grad * (other * self.data ** (other - 1))
+        out._backward = _backward
+        return out
 
-    def tanh(self):  # tanh(self)
-        # TODO: Implement hyperbolic tangent activation
-        # TODO: Implement _backward for tanh
-        pass
+    def tanh(self):
+        t = (math.exp(2 * self.data) - 1) / (math.exp(2 * self.data) + 1)
+        out = Value(t, (self,))
 
+        def _backward():
+            self.grad += out.grad * (1 - t**2)
+
+        out._backward = _backward
+        return out
+    
     def exp(self):  # e**self
-        # TODO: Implement exponential function (math.exp)
-        # TODO: Implement _backward for exp
-        pass
+        out = Value(math.exp(self.data), (self,))
+        def _backward():
+            self.grad += out.grad * out.data
+        out._backward = _backward
+        return out
 
     def reset_grad(self):
-        # TODO: Reset self.grad to 0.0
-        pass
+        self.grad = 0
 
     def _get_topo(self):
-        # TODO: Return a list of all nodes in topological order
-        pass
+        topo = []
+        visited = set()
+
+        def _build_topo(v):
+            if v not in visited:
+                visited.add(v)
+
+                for child in v._prev:
+                    _build_topo(child)
+
+                topo.append(v)
+
+        _build_topo(self)
+        return topo
+
 
     def backward(self):
-        # TODO: Retrieve topological order, set root grad to 1.0, and apply _backward in reverse
-        pass
+        topo = self._get_topo()
+        self.grad = 1.0
+        for v in reversed(topo):
+            v._backward()
 
     def __int__(self):  # int(self)
-        # TODO: Return data as int
-        pass
+        return int(self.data)
 
     def __float__(self):  # float(self)
-        # TODO: Return data as float
-        pass
+        return float(self.data)
