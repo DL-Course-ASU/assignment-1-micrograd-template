@@ -1,0 +1,415 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=2.4cm]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+
+\title{MicroGrad: A Scalar Automatic Differentiation Engine}
+\author{Mariam Riyad Freeg\\Student ID: 23P0147\\
+CSE485--CSE488 Deep Learning}
+\date{October 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This report presents a scalar automatic differentiation engine and
+neural network API implemented without PyTorch autograd. Arithmetic
+operations build a computational graph, and reverse-mode
+backpropagation calculates gradients using the chain rule. The
+implementation passed all 12 course template tests. A multilayer
+perceptron trained on 21 synthetic examples reduced its recorded
+mean squared error from 0.643510302 to 0.002372670 in 200 epochs.
+\end{abstract}
+
+\section{Introduction}
+
+Automatic differentiation supplies the gradients needed to train
+neural networks. This assignment implements that mechanism using
+individual scalar values. Each result remembers its operands and
+a local derivative rule. A reverse traversal combines those rules
+to obtain gradients of a final output with respect to earlier
+values and model parameters. The design is inspired by MicroGrad
+and follows the course assignment.
+
+\section{Mathematical Background}
+
+For an operation $z=f(a,b)$ and a final loss $L$, the chain rule is
+\[
+\frac{\partial L}{\partial a}
+=
+\frac{\partial L}{\partial z}
+\frac{\partial z}{\partial a}.
+\]
+The implemented local derivatives are
+\begin{align*}
+z=a+b &: &
+\frac{\partial z}{\partial a}=1, \quad
+\frac{\partial z}{\partial b}=1,\\
+z=ab &: &
+\frac{\partial z}{\partial a}=b, \quad
+\frac{\partial z}{\partial b}=a,\\
+z=a^n &: &
+\frac{\partial z}{\partial a}=na^{n-1},\\
+z=\tanh(a) &: &
+\frac{\partial z}{\partial a}=1-\tanh^2(a),\\
+z=e^a &: &
+\frac{\partial z}{\partial a}=e^a.
+\end{align*}
+
+\subsection*{Worked numerical example}
+
+Let $a=3$, $c=a+a$, and $d=ca$. The forward values are $c=6$
+and $d=18$. Backpropagation starts with
+$\partial d/\partial d=1$. Multiplication contributes
+\[
+\frac{\partial d}{\partial c}=a=3,
+\qquad
+\left.\frac{\partial d}{\partial a}\right|_{\rm direct}=c=6.
+\]
+Addition uses $a$ twice, contributing $3$ from each input.
+The accumulated gradient is therefore
+\[
+\frac{\partial d}{\partial a}=6+3+3=12.
+\]
+The result also follows from $d=2a^2$ and
+$\partial d/\partial a=4a=12$ at $a=3$.
+
+\section{Computational Graph and Backpropagation}
+
+A \texttt{Value} output stores references to its operands.
+Figure~\ref{fig:graph} shows the worked example. Solid blue
+arrows represent forward computation. Dashed red arrows show
+the reverse direction of gradient flow. A bar over a variable
+denotes its accumulated gradient.
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[>=Latex,every node/.style={font=\small}]
+\node[draw,rounded corners,align=center] (a) at (0,0)
+    {$a=3$\\$\bar a=12$};
+\node[draw,circle] (add) at (2.2,1) {$+$};
+\node[draw,rounded corners,align=center] (c) at (4.2,1)
+    {$c=6$\\$\bar c=3$};
+\node[draw,circle] (mul) at (6.3,0) {$\times$};
+\node[draw,rounded corners,align=center] (d) at (8.3,0)
+    {$d=18$\\$\bar d=1$};
+
+\draw[->,thick,blue!70!black] (a) to[bend left=30] (add);
+\draw[->,thick,blue!70!black] (a) to[bend right=20] (add);
+\draw[->,thick,blue!70!black] (add) -- (c);
+\draw[->,thick,blue!70!black] (c) -- (mul);
+\draw[->,thick,blue!70!black] (a) -- (mul);
+\draw[->,thick,blue!70!black] (mul) -- (d);
+
+\draw[->,dashed,red!70!black] (d.north)
+    to[bend left=25] (mul.north);
+\draw[->,dashed,red!70!black] (mul.north)
+    to[bend left=25] (c.north);
+\draw[->,dashed,red!70!black] (c.north)
+    to[bend left=25] (add.north);
+\draw[->,dashed,red!70!black] (add.north)
+    to[bend left=25] (a.north);
+\draw[->,dashed,red!70!black] (mul.south)
+    to[bend left=25] (a.south);
+\end{tikzpicture}
+\caption{Forward values and reverse gradients for
+$d=(a+a)a$ at $a=3$.}
+\label{fig:graph}
+\end{figure}
+
+Each operation attaches a local \texttt{\_backward} function.
+The global \texttt{backward()} method seeds the output gradient
+with $1$ and invokes those local functions in the correct order.
+
+\section{Topological Sorting Algorithm}
+
+A node must receive every downstream contribution before its
+local backward rule runs. Depth-first search constructs a
+topological list:
+
+\begin{verbatim}
+topo = []
+visited = set()
+
+def build_topo(node):
+    if node in visited:
+        return
+    visited.add(node)
+    for parent in node._prev:
+        build_topo(parent)
+    topo.append(node)
+
+build_topo(output)
+output.grad = 1.0
+for node in reversed(topo):
+    node._backward()
+\end{verbatim}
+
+The algorithm appends each node \emph{after} visiting its
+parents. Reversing the resulting list processes the output
+before its dependencies. The visited set prevents a shared
+node from appearing twice in the list. Its gradient still
+accumulates contributions from every path.
+
+\section{Implementation of \texttt{Value}, \texttt{Neuron},
+\texttt{Layer}, and \texttt{MLP}}
+
+\subsection*{\texttt{Value}}
+
+The \texttt{Value} class stores scalar \texttt{data}, accumulated
+\texttt{grad}, operand references in \texttt{\_prev}, an operation
+label, and a local \texttt{\_backward} function. Python arithmetic
+special methods create graph nodes for operations such as addition
+and multiplication. The implementation also
+supports numeric constants, reverse operations, subtraction,
+division, powers, \texttt{tanh}, and \texttt{exp}. Invalid operand
+types raise errors. \texttt{reset\_grad()} clears one stored
+gradient; \texttt{\_get\_topo()} and \texttt{backward()} implement
+the global reverse pass.
+
+\subsection*{\texttt{Neuron}}
+
+A neuron stores one \texttt{Value} weight for each input and one
+\texttt{Value} bias. Each is initialized with
+\texttt{random.uniform(-1, 1)}. Its forward method checks the
+input count and computes
+\[
+h=\tanh\left(\sum_{i=1}^{m}w_i x_i+b\right).
+\]
+\texttt{parameters()} returns its weights and bias;
+\texttt{zero\_grad()} clears their gradients.
+
+\subsection*{\texttt{Layer} and \texttt{MLP}}
+
+A layer applies its neurons to the same input. An MLP constructs
+successive layers and passes each layer's output to the next.
+Their \texttt{parameters()} methods flatten parameter lists,
+while their \texttt{zero\_grad()} methods clear all parameter
+gradients.
+
+\section{Implementation and Validation}
+
+The course template tests were run from the project root with
+\texttt{py -m pytest -q}. The observed result was
+\texttt{12 passed}: nine engine tests and three neural network
+tests. The suite covers arithmetic, type
+errors, powers, activations, division by zero, graph gradients,
+network construction, and backpropagation.
+
+\begin{table}[htbp]
+\centering
+\caption{Analytical gradients compared with actual engine output.}
+\label{tab:checks}
+\begin{tabular}{p{7.2cm}rr}
+\toprule
+Check & Expected & Observed\\
+\midrule
+$a+a$ at $a=3$: gradient at $a$ & 2 & 2\\
+$(a+a)a$ at $a=3$: gradient at $a$ & 12 & 12\\
+$(ab)(a+b)$ at $a=-2,b=3$: gradient at $a$
+    & $-3$ & $-3$\\
+$(ab)(a+b)$ at $a=-2,b=3$: gradient at $b$
+    & $-8$ & $-8$\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+A further numerical check used
+\[
+F(x,y)=\frac{\tanh(xy+x^2)+e^y}{2}
+\]
+at $x=1.2$ and $y=-0.7$. Central finite differences used
+$h=10^{-6}$; for example,
+\[
+\frac{\partial F}{\partial x}
+\approx
+\frac{F(x+h,y)-F(x-h,y)}{2h}.
+\]
+
+\begin{table}[htbp]
+\centering
+\caption{Autograd and finite-difference gradients.}
+\label{tab:finite}
+\begin{tabular}{lrr}
+\toprule
+Variable & Autograd & Finite difference\\
+\midrule
+$x$ & 0.604841098199 & 0.604841098151\\
+$y$ & 0.675239309448 & 0.675239309522\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+These comparisons check the derivative rules independently
+of the course test assertions.
+
+\section{Experimental Setup}
+
+The saved notebook generated 21 inputs from $-1.0$ to $1.0$
+in increments of $0.1$. Targets were
+\[
+y=\tanh(1.5x).
+\]
+This is a generated synthetic dataset, not an externally loaded
+file. The notebook fixed the random seed at $42$ and constructed
+an MLP with one input, four hidden neurons, and one output.
+It has $4(1+1)+1(4+1)=13$ trainable parameters.
+
+Training used 200 epochs, learning rate $\eta=0.05$, and
+full-batch mean squared error:
+\[
+L=\frac{1}{N}\sum_{j=1}^{N}(\hat y_j-y_j)^2.
+\]
+Each epoch cleared parameter gradients, calculated predictions
+and loss, called \texttt{backward()}, and updated parameters:
+\[
+p\leftarrow p-\eta\frac{\partial L}{\partial p}.
+\]
+
+\section{Results and Visualizations}
+
+A fresh run reproduced the saved notebook's first and last
+recorded losses: $0.643510302$ and $0.002372670$. This is a
+reduction of about $99.63\%$. Figures~\ref{fig:loss} and
+\ref{fig:predictions} plot values from that reproducible run.
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+    width=0.85\textwidth,
+    height=6cm,
+    xlabel={Epoch},
+    ylabel={Mean squared error},
+    xmin=0, xmax=200,
+    ymin=0,
+    grid=major
+]
+\addplot[blue,thick,mark=none] coordinates {
+(0,0.64351030) (10,0.19898282) (20,0.09367075)
+(30,0.05010304) (40,0.02973962) (50,0.01913593)
+(60,0.01314853) (70,0.00955813) (80,0.00730383)
+(90,0.00583570) (100,0.00485007) (110,0.00417054)
+(120,0.00369051) (130,0.00334335) (140,0.00308634)
+(150,0.00289144) (160,0.00273994) (170,0.00261913)
+(180,0.00252027) (190,0.00243730) (199,0.00237267)
+};
+\end{axis}
+\end{tikzpicture}
+\caption{Training loss. Points are sampled every ten epochs
+and at the final recorded epoch from the notebook-equivalent run.}
+\label{fig:loss}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+    width=0.85\textwidth,
+    height=7cm,
+    xlabel={Input $x$},
+    ylabel={Output},
+    xmin=-1, xmax=1,
+    ymin=-1, ymax=1,
+    grid=major,
+    legend pos=north west
+]
+\addplot[black,thick,mark=none] coordinates {
+(-1.0,-0.905148) (-0.9,-0.874053) (-0.8,-0.833655)
+(-0.7,-0.781806) (-0.6,-0.716298) (-0.5,-0.635149)
+(-0.4,-0.537050) (-0.3,-0.421899) (-0.2,-0.291313)
+(-0.1,-0.148885) (0.0,0.000000) (0.1,0.148885)
+(0.2,0.291313) (0.3,0.421899) (0.4,0.537050)
+(0.5,0.635149) (0.6,0.716298) (0.7,0.781806)
+(0.8,0.833655) (0.9,0.874053) (1.0,0.905148)
+};
+\addlegendentry{Target}
+
+\addplot[orange,dashed,thick,mark=none] coordinates {
+(-1.0,-0.579182) (-0.9,-0.569727) (-0.8,-0.560647)
+(-0.7,-0.551990) (-0.6,-0.543794) (-0.5,-0.536088)
+(-0.4,-0.528894) (-0.3,-0.522222) (-0.2,-0.516075)
+(-0.1,-0.510450) (0.0,-0.505335) (0.1,-0.500715)
+(0.2,-0.496570) (0.3,-0.492878) (0.4,-0.489615)
+(0.5,-0.486759) (0.6,-0.484284) (0.7,-0.482170)
+(0.8,-0.480396) (0.9,-0.478945) (1.0,-0.477800)
+};
+\addlegendentry{Before training}
+
+\addplot[green!60!black,thick,mark=none] coordinates {
+(-1.0,-0.903982) (-0.9,-0.882340) (-0.8,-0.852153)
+(-0.7,-0.810022) (-0.6,-0.751666) (-0.5,-0.672347)
+(-0.4,-0.568062) (-0.3,-0.437552) (-0.2,-0.284444)
+(-0.1,-0.117939) (0.0,0.049253) (0.1,0.204942)
+(0.2,0.340915) (0.3,0.453981) (0.4,0.544888)
+(0.5,0.616526) (0.6,0.672447) (0.7,0.716017)
+(0.8,0.750067) (0.9,0.776834) (1.0,0.798027)
+};
+\addlegendentry{After training}
+\end{axis}
+\end{tikzpicture}
+\caption{Targets and model predictions before and after training.}
+\label{fig:predictions}
+\end{figure}
+
+\begin{table}[htbp]
+\centering
+\caption{Selected predictions, rounded to three decimals.}
+\label{tab:predictions}
+\begin{tabular}{rrrr}
+\toprule
+Input $x$ & Target & Before & After\\
+\midrule
+$-1.0$ & $-0.905$ & $-0.579$ & $-0.904$\\
+$-0.5$ & $-0.635$ & $-0.536$ & $-0.672$\\
+$0.0$  & $0.000$  & $-0.505$ & $0.049$\\
+$0.5$  & $0.635$  & $-0.487$ & $0.617$\\
+$1.0$  & $0.905$  & $-0.478$ & $0.798$\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The trained curve is substantially closer to the target curve.
+Remaining error is visible near the positive endpoint: at
+$x=1$, the target is approximately $0.905$ and the final
+prediction is approximately $0.798$, an absolute error of
+about $0.107$. These results describe training examples only;
+no held-out test set was used.
+
+\section{Conceptual Discussion}
+
+\paragraph{Why use topological order?}
+In a shared graph, a node can receive gradients from several
+later operations. Reverse topological order lets those operations
+send their contributions before the node's backward function runs.
+
+\paragraph{Why accumulate gradients?}
+For $d=(a+a)a$ at $a=3$, multiplication contributes $6$
+directly to $a$, and addition contributes $3+3$. Assignment
+would lose contributions; accumulation gives the correct $12$.
+
+\paragraph{Why reset gradients?}
+Old gradients remain stored in parameters. Calling
+\texttt{zero\_grad()} each iteration ensures an update uses only
+the current loss.
+
+\section{Limitations and Conclusion}
+
+A scalar engine creates many Python objects and does not offer
+the efficiency of tensor-based systems. The experiment uses a
+small generated dataset and does not measure generalization.
+The final neuron uses \texttt{tanh}, so its output is bounded
+between $-1$ and $1$.
+
+Within this scope, all 12 course tests passed, analytical and
+numerical gradient checks agreed, and the specified MLP
+reduced its training loss. These observations support the
+implemented graph construction and backpropagation behavior.
+
+\end{document}
