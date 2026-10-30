@@ -1,0 +1,92 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage{geometry}
+\geometry{top=1in, bottom=1in, left=1in, right=1in}
+\usepackage{amsmath, amssymb, amsthm}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{listings}
+
+\definecolor{primary}{RGB}{26, 54, 93}
+\definecolor{secondary}{RGB}{43, 108, 176}
+\definecolor{codegray}{RGB}{245, 247, 250}
+
+\lstset{
+    backgroundcolor=\color{codegray},
+    basicstyle=\ttfamily\small,
+    breaklines=true,
+    frame=single,
+    rulecolor=\color{lightgray}
+}
+
+\title{\textbf{Assignment 1: MicroGrad (Scalar Autograd Engine)}\\
+\large CSE485 / CSE488: Deep Learning --- Faculty of Engineering, Ain Shams University}
+\author{\textbf{Madonna Emad Labib} (ID: \texttt{23P0325})\\
+Faculty of Engineering, Ain Shams University\\
+\texttt{madonnaemad16@gmail.com}}
+\date{Fall 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This report documents the architectural design, mathematical derivations, and experimental verification of a custom scalar automatic differentiation engine and neural network API built from first principles. Inspired by Andrej Karpathy's \texttt{micrograd}, this implementation features dynamic Directed Acyclic Graph (DAG) construction, reverse-mode automatic differentiation via depth-first topological sorting, and modular PyTorch-style neural network layers.
+\end{abstract}
+
+\section{Introduction}
+Automatic differentiation is the core mathematical foundation supporting modern deep learning frameworks such as PyTorch, JAX, and TensorFlow. In this assignment, we implement scalar automatic differentiation from scratch without external autograd dependencies. Every node dynamically records mathematical operations and child dependencies during the forward pass, establishing a directed acyclic graph (DAG) evaluated in reverse topological order during backpropagation.
+
+\section{Mathematical Derivations of Local Derivatives}
+In reverse-mode automatic differentiation, the objective is to compute the gradient of a scalar scalar loss $L$ with respect to every intermediate node $v$, denoted by the adjoint $\bar{v} = \frac{\partial L}{\partial v}$. By the multivariate chain rule:
+\begin{equation}
+\frac{\partial L}{\partial x_i} = \sum_{p \in \text{Parents}(x_i)} \frac{\partial L}{\partial p} \cdot \frac{\partial p}{\partial x_i}
+\end{equation}
+
+\subsection{Elementary Operations}
+\begin{itemize}
+    \item \textbf{Addition ($z = x + y$):}
+    $$\frac{\partial z}{\partial x} = 1.0, \quad \frac{\partial z}{\partial y} = 1.0 \implies \bar{x} \mathrel{+}= 1.0 \cdot \bar{z}, \quad \bar{y} \mathrel{+}= 1.0 \cdot \bar{z}$$
+    \item \textbf{Multiplication ($z = x \cdot y$):}
+    $$\frac{\partial z}{\partial x} = y, \quad \frac{\partial z}{\partial y} = x \implies \bar{x} \mathrel{+}= y \cdot \bar{z}, \quad \bar{y} \mathrel{+}= x \cdot \bar{z}$$
+    \item \textbf{Power ($z = x^c$ for $c \in \mathbb{R}$):}
+    $$\frac{\partial z}{\partial x} = c x^{c-1} \implies \bar{x} \mathrel{+}= (c x^{c-1}) \cdot \bar{z}$$
+    \item \textbf{Hyperbolic Tangent ($z = \tanh(x)$):}
+    $$\frac{d}{dx}\tanh(x) = 1 - \tanh^2(x) = 1 - z^2 \implies \bar{x} \mathrel{+}= (1 - z^2) \cdot \bar{z}$$
+    \item \textbf{Exponential ($z = \exp(x)$):}
+    $$\frac{d}{dx}\exp(x) = \exp(x) = z \implies \bar{x} \mathrel{+}= z \cdot \bar{z}$$
+\end{itemize}
+
+\section{Mastering the Topological Sort}
+\subsection{Algorithm Formulation}
+A node can evaluate its adjoint $\bar{v}$ only after all nodes depending on it have finished propagating their adjoints. We employ Depth-First Search (DFS) with post-order traversal:
+\begin{enumerate}
+    \item Initialize an empty list \texttt{topo} and set \texttt{visited}.
+    \item In \texttt{build\_topo(node)}:
+    \begin{itemize}
+        \item If \texttt{node} $\notin$ \texttt{visited}, mark as visited.
+        \item For each child in \texttt{node.\_prev}, recursively call \texttt{build\_topo(child)}.
+        \item Append \texttt{node} to \texttt{topo}.
+    \end{itemize}
+    \item Evaluating the reversed \texttt{topo} ensures that gradients propagate strictly from output to inputs.
+\end{enumerate}
+
+\subsection{Addressing Common Implementation Traps}
+\begin{itemize}
+    \item \textbf{The Diamond Graph Trap:} If variable $a$ branches into multiple paths (e.g., $c = a + a$), assigning $\bar{a} =$ overwrites earlier contributions. Gradients must accumulate via \texttt{self.grad += ...} to honor multivariable calculus.
+    \item \textbf{The Post-Order Trap:} Appending nodes before exploring children reverses execution order, applying the chain rule before downstream gradients are known.
+\end{itemize}
+
+\section{Neural Network API}
+The \texttt{src/nn.py} module implements:
+\begin{itemize}
+    \item \texttt{Neuron(nin)}: Holds weights $w \sim \mathcal{U}(-1, 1)$ and bias $b \sim \mathcal{U}(-1, 1)$. Computes $\tanh(\sum w_i x_i + b)$.
+    \item \texttt{Layer(nin, nout)}: Manages $nout$ parallel neurons.
+    \item \texttt{MLP(nin, nouts)}: Composes layers sequentially and implements parameter collection and \texttt{zero\_grad()}.
+\end{itemize}
+
+\section{Results \& Verification}
+All unit tests in \texttt{tests/test\_engine.py} (9/9) and \texttt{tests/test\_nn.py} (3/3) passed. The GitHub Actions CI/CD autograder verified the implementation with score \textbf{12/12 PASSED (100\%)}.
+
+\end{document}
