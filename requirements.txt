@@ -1,0 +1,7 @@
+# needed only for the demo notebook (the engine itself is pure Python)
+numpy
+matplotlib
+scikit-learn
+jupyter
+# needed to run the tests
+pytest

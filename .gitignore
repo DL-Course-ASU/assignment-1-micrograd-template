@@ -216,3 +216,18 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# --- LaTeX build artifacts (keep report.tex, figures/ and report.pdf) ---
+report/*.aux
+report/*.fdb_latexmk
+report/*.fls
+report/*.out
+report/*.toc
+report/*.synctex.gz
+report/*.bbl
+report/*.blg
+
+# --- LMS submission bundle ---
+submission/
+*.zip
+report/
