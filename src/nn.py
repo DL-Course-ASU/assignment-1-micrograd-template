@@ -12,7 +12,7 @@ class Neuron:
         return act.tanh()
 
     def parameters(self):
-        return self.w + [self.b]
+        return self.w + [self.b] 
 
     def zero_grad(self):
         for p in self.parameters():
