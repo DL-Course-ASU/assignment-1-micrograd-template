@@ -1,33 +1,23 @@
 import random
 from src.engine import Value
 
-
-class Module:
-
-    def zero_grad(self):
-        for p in self.parameters():
-            p.reset_grad()
-
-    def parameters(self):
-        return []
-
-
-class Neuron(Module):
-
+class Neuron:
     def __init__(self, nin):
         self.w = [Value(random.uniform(-1, 1)) for _ in range(nin)]
         self.b = Value(random.uniform(-1, 1))
 
-    def __call__(self, x):
+    def __call__(self, x):  # Neuron(nin)(x)
         act = sum((wi * xi for wi, xi in zip(self.w, x)), self.b)
         return act.tanh()
 
     def parameters(self):
         return self.w + [self.b]
 
+    def zero_grad(self):
+        for p in self.parameters():
+            p.reset_grad()
 
-class Layer(Module):
-
+class Layer:
     def __init__(self, nin, nout):
         self.neurons = [Neuron(nin) for _ in range(nout)]
 
@@ -38,9 +28,11 @@ class Layer(Module):
     def parameters(self):
         return [p for n in self.neurons for p in n.parameters()]
 
+    def zero_grad(self):
+        for p in self.parameters():
+            p.reset_grad()
 
-class MLP(Module):
-
+class MLP:
     def __init__(self, nin, nouts):
         sizes = [nin] + nouts
         self.layers = [Layer(sizes[i], sizes[i + 1]) for i in range(len(nouts))]
@@ -52,3 +44,7 @@ class MLP(Module):
 
     def parameters(self):
         return [p for layer in self.layers for p in layer.parameters()]
+
+    def zero_grad(self):
+        for p in self.parameters():
+            p.reset_grad()

@@ -1,18 +1,18 @@
 import math
 
-
 class Value:
-    """A box holding one number, plus what we need to backprop through it."""
-
     def __init__(self, data, _children=(), _op='', label=''):
         self.data = data
-        self.grad = 0.0
+        self.grad = 0.0  # means no effect by default
         self._backward = lambda: None
         self._prev = set(_children)
         self._op = _op
         self.label = label
 
-    def __add__(self, other):
+    def __repr__(self):
+        return f"Value(data={self.data})"
+
+    def __add__(self, other):  # self + other
         other = other if isinstance(other, Value) else Value(other)
         out = Value(self.data + other.data, (self, other), '+')
 
@@ -22,7 +22,10 @@ class Value:
         out._backward = _backward
         return out
 
-    def __mul__(self, other):
+    def __radd__(self, other):  # other + self
+        return self + other
+
+    def __mul__(self, other):  # self * other
         other = other if isinstance(other, Value) else Value(other)
         out = Value(self.data * other.data, (self, other), '*')
 
@@ -32,7 +35,19 @@ class Value:
         out._backward = _backward
         return out
 
-    def __pow__(self, other):
+    def __rmul__(self, other):  # other * self
+        return self * other
+
+    def __neg__(self):  # -self
+        return self * -1
+
+    def __sub__(self, other):  # self - other
+        return self + (-other)
+
+    def __truediv__(self, other):  # self / other
+        return self * other ** -1
+
+    def __pow__(self, other):  # self ** other
         assert isinstance(other, (int, float)), "only int/float powers supported"
         out = Value(self.data ** other, (self,), f'**{other}')
 
@@ -41,7 +56,7 @@ class Value:
         out._backward = _backward
         return out
 
-    def tanh(self):
+    def tanh(self):  # tanh(self)
         t = math.tanh(self.data)
         out = Value(t, (self,), 'tanh')
 
@@ -50,35 +65,13 @@ class Value:
         out._backward = _backward
         return out
 
-    def exp(self):
+    def exp(self):  # e**self
         out = Value(math.exp(self.data), (self,), 'exp')
 
         def _backward():
             self.grad += out.data * out.grad
         out._backward = _backward
         return out
-
-    # built from + * ** above, so no _backward needed
-    def __neg__(self):
-        return self * -1
-
-    def __sub__(self, other):
-        return self + (-other)
-
-    def __truediv__(self, other):
-        return self * other ** -1
-
-    def __radd__(self, other):
-        return self + other
-
-    def __rmul__(self, other):
-        return self * other
-
-    def __rsub__(self, other):
-        return other + (-self)
-
-    def __rtruediv__(self, other):
-        return other * self ** -1
 
     def reset_grad(self):
         self.grad = 0.0
@@ -101,11 +94,8 @@ class Value:
         for node in reversed(topo):
             node._backward()
 
-    def __int__(self):
+    def __int__(self):  # int(self)
         return int(self.data)
 
-    def __float__(self):
+    def __float__(self):  # float(self)
         return float(self.data)
-
-    def __repr__(self):
-        return f"Value(data={self.data})"
