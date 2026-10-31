@@ -1,79 +1,147 @@
+"""A small reverse-mode automatic differentiation engine for scalar values."""
+
+from __future__ import annotations
+
 import math
+from numbers import Real
+from typing import Callable, Iterable
+
 
 class Value:
-    def __init__(self, data, _children=(), _op='', label=''):
-        self.data = data
-        self.grad = 0.0  # means no effect by default
-        self._backward = lambda: None
+    """A scalar in a computation graph, together with its reverse-mode gradient.
+
+    Operations create new ``Value`` objects and retain their immediate parents.
+    Calling :meth:`backward` on an output walks that graph in reverse topological
+    order and accumulates derivatives into each node's ``grad`` field.
+    """
+
+    def __init__(self, data: Real, _children: Iterable[Value] = (), _op: str = "", label: str = ""):
+        if not isinstance(data, Real):
+            raise TypeError(f"Value data must be a real number, got {type(data).__name__}")
+        self.data = float(data)
+        self.grad = 0.0
+        self._backward: Callable[[], None] = lambda: None
         self._prev = set(_children)
         self._op = _op
         self.label = label
 
-    def __repr__(self):
-        # TODO: Return string representation, e.g., "Value(data=...)"
-        pass
+    @staticmethod
+    def _coerce(other: Real | Value) -> Value:
+        if isinstance(other, Value):
+            return other
+        if isinstance(other, Real):
+            return Value(other)
+        raise TypeError(f"Expected a real number or Value, got {type(other).__name__}")
 
-    def __add__(self, other):  # self + other
-        # TODO: Handle both Value and scalar inputs
-        # TODO: Return new Value and implement _backward
-        pass
+    def __repr__(self) -> str:
+        return f"Value(data={self.data})"
 
-    def __radd__(self, other):  # other + self
-        # TODO: Implement reverse addition
-        pass
+    def __add__(self, other: Real | Value) -> Value:
+        other = self._coerce(other)
+        out = Value(self.data + other.data, (self, other), "+")
 
-    def __mul__(self, other):  # self * other
-        # TODO: Handle both Value and scalar inputs
-        # TODO: Return new Value and implement _backward using product rule
-        pass
+        def _backward() -> None:
+            self.grad += out.grad
+            other.grad += out.grad
 
-    def __rmul__(self, other):  # other * self
-        # TODO: Implement reverse multiplication
-        pass
+        out._backward = _backward
+        return out
 
-    def __neg__(self):  # -self
-        # TODO: Implement negation
-        pass
+    def __radd__(self, other: Real | Value) -> Value:
+        return self + other
 
-    def __sub__(self, other):  # self - other
-        # TODO: Implement subtraction
-        pass
+    def __mul__(self, other: Real | Value) -> Value:
+        other = self._coerce(other)
+        out = Value(self.data * other.data, (self, other), "*")
 
-    def __truediv__(self, other):  # self / other
-        # TODO: Implement division using self * other**-1
-        pass
+        def _backward() -> None:
+            self.grad += other.data * out.grad
+            other.grad += self.data * out.grad
 
-    def __pow__(self, other):  # self ** other
-        # TODO: Assert other is int or float
-        # TODO: Return new Value and implement _backward using power rule
-        pass
+        out._backward = _backward
+        return out
 
-    def tanh(self):  # tanh(self)
-        # TODO: Implement hyperbolic tangent activation
-        # TODO: Implement _backward for tanh
-        pass
+    def __rmul__(self, other: Real | Value) -> Value:
+        return self * other
 
-    def exp(self):  # e**self
-        # TODO: Implement exponential function (math.exp)
-        # TODO: Implement _backward for exp
-        pass
+    def __neg__(self) -> Value:
+        return self * -1.0
 
-    def reset_grad(self):
-        # TODO: Reset self.grad to 0.0
-        pass
+    def __sub__(self, other: Real | Value) -> Value:
+        return self + (-self._coerce(other))
 
-    def _get_topo(self):
-        # TODO: Return a list of all nodes in topological order
-        pass
+    def __rsub__(self, other: Real | Value) -> Value:
+        return self._coerce(other) - self
 
-    def backward(self):
-        # TODO: Retrieve topological order, set root grad to 1.0, and apply _backward in reverse
-        pass
+    def __truediv__(self, other: Real | Value) -> Value:
+        other = self._coerce(other)
+        return self * (other ** -1)
 
-    def __int__(self):  # int(self)
-        # TODO: Return data as int
-        pass
+    def __rtruediv__(self, other: Real | Value) -> Value:
+        return self._coerce(other) / self
 
-    def __float__(self):  # float(self)
-        # TODO: Return data as float
-        pass
+    def __pow__(self, other: int | float) -> Value:
+        assert isinstance(other, (int, float)), "Only integer and floating-point exponents are supported"
+        out = Value(self.data**other, (self,), f"**{other}")
+
+        def _backward() -> None:
+            if other == 0:
+                local_derivative = 0.0
+            else:
+                local_derivative = other * (self.data ** (other - 1))
+            self.grad += local_derivative * out.grad
+
+        out._backward = _backward
+        return out
+
+    def tanh(self) -> Value:
+        result = math.tanh(self.data)
+        out = Value(result, (self,), "tanh")
+
+        def _backward() -> None:
+            self.grad += (1.0 - result**2) * out.grad
+
+        out._backward = _backward
+        return out
+
+    def exp(self) -> Value:
+        result = math.exp(self.data)
+        out = Value(result, (self,), "exp")
+
+        def _backward() -> None:
+            self.grad += result * out.grad
+
+        out._backward = _backward
+        return out
+
+    def reset_grad(self) -> None:
+        """Clear this node's accumulated derivative."""
+        self.grad = 0.0
+
+    def _get_topo(self) -> list[Value]:
+        """Return every reachable node once, with parents before consumers."""
+        topo: list[Value] = []
+        visited: set[Value] = set()
+
+        def build_topo(node: Value) -> None:
+            if node not in visited:
+                visited.add(node)
+                for child in node._prev:
+                    build_topo(child)
+                topo.append(node)
+
+        build_topo(self)
+        return topo
+
+    def backward(self) -> None:
+        """Backpropagate a unit derivative from this output through its graph."""
+        topo = self._get_topo()
+        self.grad = 1.0
+        for node in reversed(topo):
+            node._backward()
+
+    def __int__(self) -> int:
+        return int(self.data)
+
+    def __float__(self) -> float:
+        return float(self.data)

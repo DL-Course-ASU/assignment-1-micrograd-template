@@ -1,56 +1,77 @@
+"""A minimal neural-network API built entirely from scalar ``Value`` nodes."""
+
+from __future__ import annotations
+
 import random
+from collections.abc import Sequence
+
 from src.engine import Value
 
+
 class Neuron:
-    def __init__(self, nin):
-        # TODO: Initialize weights (w) as a list of Value objects (random uniform -1 to 1)
-        # TODO: Initialize bias (b) as a Value object (random uniform -1 to 1)
-        pass
+    """A fully connected neuron with a tanh activation."""
 
-    def __call__(self, x):  # Neuron(nin)(x)
-        # TODO: Calculate w*x + b
-        # TODO: Pass the result through a tanh activation and return it
-        pass
+    def __init__(self, nin: int):
+        if nin <= 0:
+            raise ValueError("A neuron must have at least one input")
+        self.w = [Value(random.uniform(-1.0, 1.0), label=f"w{i}") for i in range(nin)]
+        self.b = Value(random.uniform(-1.0, 1.0), label="b")
 
-    def parameters(self):
-        # TODO: Return a list of all parameters (weights + bias)
-        pass
+    def __call__(self, x: Sequence[float | Value]) -> Value:
+        if len(x) != len(self.w):
+            raise ValueError(f"Expected {len(self.w)} inputs, got {len(x)}")
+        activation = sum((wi * xi for wi, xi in zip(self.w, x)), self.b)
+        return activation.tanh()
 
-    def zero_grad(self):
-        # TODO: Call reset_grad() on all parameters
-        pass
+    def parameters(self) -> list[Value]:
+        return [*self.w, self.b]
+
+    def zero_grad(self) -> None:
+        for parameter in self.parameters():
+            parameter.reset_grad()
+
 
 class Layer:
-    def __init__(self, nin, nout):
-        # TODO: Initialize a list of `nout` Neurons, each with `nin` inputs
-        pass
+    """A collection of independently parameterized neurons."""
 
-    def __call__(self, x):
-        # TODO: Pass input x through all neurons
-        # TODO: Return a single output if nout==1, else return a list of outputs
-        pass
+    def __init__(self, nin: int, nout: int):
+        if nout <= 0:
+            raise ValueError("A layer must contain at least one neuron")
+        self.neurons = [Neuron(nin) for _ in range(nout)]
 
-    def parameters(self):
-        # TODO: Return a flattened list of all parameters in all neurons
-        pass
+    def __call__(self, x: Sequence[float | Value]) -> Value | list[Value]:
+        outputs = [neuron(x) for neuron in self.neurons]
+        return outputs[0] if len(outputs) == 1 else outputs
 
-    def zero_grad(self):
-        # TODO: Zero the gradients of all parameters in this layer
-        pass
+    def parameters(self) -> list[Value]:
+        return [parameter for neuron in self.neurons for parameter in neuron.parameters()]
+
+    def zero_grad(self) -> None:
+        for parameter in self.parameters():
+            parameter.reset_grad()
+
 
 class MLP:
-    def __init__(self, nin, nouts):
-        # TODO: Initialize a sequence of Layers based on the sizes in `nin` and `nouts` list
-        pass
+    """A multi-layer perceptron with tanh activations at every layer."""
 
-    def __call__(self, x):
-        # TODO: Pass input x sequentially through all layers and return the final output
-        pass
+    def __init__(self, nin: int, nouts: Sequence[int]):
+        if nin <= 0:
+            raise ValueError("An MLP must have at least one input")
+        if not nouts:
+            raise ValueError("An MLP must contain at least one layer")
 
-    def parameters(self):
-        # TODO: Return a flattened list of all parameters in all layers
-        pass
+        sizes = [nin, *nouts]
+        self.layers = [Layer(sizes[i], sizes[i + 1]) for i in range(len(nouts))]
 
-    def zero_grad(self):
-        # TODO: Zero the gradients of all parameters in the MLP
-        pass
+    def __call__(self, x: Sequence[float | Value]) -> Value | list[Value]:
+        for layer in self.layers:
+            result = layer(x)
+            x = result if isinstance(result, list) else [result]
+        return result
+
+    def parameters(self) -> list[Value]:
+        return [parameter for layer in self.layers for parameter in layer.parameters()]
+
+    def zero_grad(self) -> None:
+        for parameter in self.parameters():
+            parameter.reset_grad()
