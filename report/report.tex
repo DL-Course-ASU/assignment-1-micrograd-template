@@ -1,0 +1,507 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage[a4paper,margin=23mm,headheight=15pt]{geometry}
+\usepackage{amsmath,amssymb,booktabs,array,tabularx}
+\usepackage{xcolor,fancyhdr,titlesec,listings,pgfplots}
+\usepackage[hidelinks]{hyperref}
+\pgfplotsset{compat=1.18}
+\definecolor{navy}{HTML}{16324F}
+\definecolor{blue}{HTML}{2563A6}
+\definecolor{soft}{HTML}{F2F5F8}
+\definecolor{muted}{HTML}{526273}
+\titleformat{\section}{\Large\bfseries\color{navy}}{\thesection}{0.7em}{}
+\titleformat{\subsection}{\normalsize\bfseries\color{navy}}{\thesubsection}{0.6em}{}
+\titlespacing*{\section}{0pt}{0pt}{12pt}
+\titlespacing*{\subsection}{0pt}{12pt}{6pt}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{7pt}
+\setlength{\emergencystretch}{3em}
+\renewcommand{\arraystretch}{1.25}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\color{muted}CSE488 \enspace / \enspace Assignment 1}
+\fancyhead[R]{\small\color{muted}Mawada Eissa \enspace | \enspace 23P0265}
+\fancyfoot[C]{\small\thepage}
+\renewcommand{\headrulewidth}{0.3pt}
+\lstset{language=Python,basicstyle=\ttfamily\small,backgroundcolor=\color{soft},
+  frame=single,rulecolor=\color{soft},framesep=7pt,breaklines=true,
+  showstringspaces=false,columns=fullflexible,keepspaces=true,
+  keywordstyle=\color{blue}\bfseries,commentstyle=\color{muted}}
+\hypersetup{pdftitle={Assignment 1: MicroGrad - Scalar Autograd Engine},pdfauthor={Mawada Eissa}}
+
+\begin{document}
+\hypersetup{pageanchor=false}
+\begin{titlepage}
+\centering
+\vspace*{12mm}
+{\large\bfseries\color{navy}AIN SHAMS UNIVERSITY\par}
+\vspace{3mm}
+{\large Faculty of Engineering\par}
+\vspace{23mm}
+{\large\color{muted}CSE488 - Deep Learning\par}
+\vspace{8mm}
+{\Huge\bfseries\color{navy}Assignment 1\par}
+\vspace{5mm}
+{\LARGE\bfseries MicroGrad\par}
+\vspace{3mm}
+{\Large Scalar Autograd Engine\par}
+\vspace{9mm}
+{\color{blue}\rule{0.65\textwidth}{1.2pt}\par}
+\vspace{19mm}
+{\small\color{muted}PREPARED BY\par}
+\vspace{4mm}
+{\Large\bfseries Mawada Eissa\par}
+\vspace{3mm}
+{\large Student ID: 23P0265\par}
+\vspace{16mm}
+{\small\color{muted}INSTRUCTORS\par}
+\vspace{4mm}
+{\large Dr. Mahmoud Khalil\par}
+\vspace{2mm}
+{\large Eng. Seif Yasser\par}
+\vfill
+{\small\color{muted}Computational graphs, reverse-mode differentiation,\par
+and neural network training from scratch\par}
+\vspace*{9mm}
+\end{titlepage}
+\hypersetup{pageanchor=true}
+\setcounter{page}{1}
+
+\section{Objective and Implementation Overview}
+This assignment~\cite{assignment} implements a scalar automatic differentiation engine and a small
+neural network API using Python. The engine records arithmetic operations as a
+computational graph and applies reverse-mode differentiation to compute the
+derivative of a scalar output with respect to its inputs. A multilayer perceptron
+(MLP) is then built entirely from these differentiable scalar operations.
+
+The implementation follows the supplied assignment template~\cite{template}.
+The engine and training calculations use the Python standard library; PyTorch
+is not used for differentiation or optimization.
+
+\subsection{Structure of the implementation}
+\begin{tabularx}{\textwidth}{@{}lX@{}}
+\toprule
+\textbf{File} & \textbf{Responsibility} \\
+\midrule
+\texttt{src/engine.py} & The \texttt{Value} class, arithmetic, activations,
+gradient accumulation, and graph traversal. \\
+\texttt{src/nn.py} & \texttt{Neuron}, \texttt{Layer}, and \texttt{MLP}, including
+forward passes, parameter collection, and gradient clearing. \\
+\texttt{demo.ipynb} & A gradient sanity check and a reproducible XOR training
+experiment with predictions and a loss visualization. \\
+\bottomrule
+\end{tabularx}
+
+\subsection{The \texttt{Value} representation}
+Each \texttt{Value} stores a numerical value in \texttt{data} and an accumulated
+gradient in \texttt{grad}. If the final scalar output is $L$, the gradient of an
+intermediate node $v$ represents $\partial L/\partial v$ after backpropagation.
+
+\begin{tabularx}{\textwidth}{@{}lX@{}}
+\toprule
+\textbf{Attribute} & \textbf{Meaning} \\
+\midrule
+\texttt{data} & The result of the forward calculation at this node. \\
+\texttt{grad} & The accumulated derivative, initialized to zero. \\
+\texttt{\_prev} & A set of input nodes used to produce this node. \\
+\texttt{\_backward} & A local function that propagates gradients to the inputs. \\
+\texttt{\_op}, \texttt{label} & Operation metadata and an optional readable name. \\
+\bottomrule
+\end{tabularx}
+
+\subsection{Recording the forward graph}
+Operator overloading allows expressions such as \texttt{a*b + a} to construct
+the graph while computing their numerical results. Python integers and floats
+are wrapped as \texttt{Value} objects when added or multiplied with a node.
+Unsupported operand types return \texttt{NotImplemented}, allowing Python to
+raise a \texttt{TypeError} when no compatible operation exists.
+
+Each operation installs a local backward function on its output. This function
+captures the input nodes and uses the output's gradient when it is eventually
+called. Leaf nodes start with a backward function that does nothing.
+
+\newpage
+\section{Mathematical Derivations}
+For an operation $z=f(a,b)$ and final scalar loss $L$, the chain rule gives
+\begin{equation}
+\frac{\partial L}{\partial a}
+=\frac{\partial L}{\partial z}\frac{\partial z}{\partial a},
+\qquad
+\frac{\partial L}{\partial b}
+=\frac{\partial L}{\partial z}\frac{\partial z}{\partial b}.
+\end{equation}
+Let $g_z=\partial L/\partial z$ denote the incoming gradient. The implementation
+adds each contribution to the corresponding input gradient.
+The formulas below apply where the real-valued expressions are defined.
+
+\subsection{Arithmetic operations}
+For addition, $z=a+b$, both local derivatives equal one:
+\begin{equation}
+g_a\mathrel{+}=g_z,\qquad g_b\mathrel{+}=g_z.
+\end{equation}
+For multiplication, $z=ab$, the product rule yields
+\begin{equation}
+g_a\mathrel{+}=b\,g_z,\qquad g_b\mathrel{+}=a\,g_z.
+\end{equation}
+For a constant exponent $p\in\mathbb{R}$, $z=a^p$ has derivative
+\begin{equation}
+g_a\mathrel{+}=p\,a^{p-1}g_z.
+\end{equation}
+The power method accepts an integer or floating-point exponent, not a
+\texttt{Value} exponent. The case $p=0$ has zero derivative and is handled
+explicitly to avoid evaluating $0^{-1}$ when the base is zero.
+
+Negation, subtraction, and division reuse existing operations:
+\begin{equation}
+-a=(-1)a,\qquad a-b=a+(-b),\qquad \frac{a}{b}=a\,b^{-1}.
+\end{equation}
+Consequently, the derivative of division follows from the multiplication and
+power rules. Division by a zero denominator raises \texttt{ZeroDivisionError}.
+Reverse operators support expressions such as \texttt{2 + a}, \texttt{3*a},
+\texttt{2 - a}, and \texttt{2/a}.
+
+\subsection{Activation functions}
+For $z=\tanh(a)$,
+\begin{equation}
+\frac{\mathrm{d}z}{\mathrm{d}a}=1-\tanh^2(a)=1-z^2,
+\qquad g_a\mathrel{+}=(1-z^2)g_z.
+\end{equation}
+The forward pass uses \texttt{math.tanh}, avoiding an explicit ratio of
+exponentials. For $z=\exp(a)$,
+\begin{equation}
+\frac{\mathrm{d}z}{\mathrm{d}a}=\exp(a)=z,
+\qquad g_a\mathrel{+}=z\,g_z.
+\end{equation}
+
+\subsection{Why gradients accumulate}
+If a node is used by multiple operations, its total derivative is the sum of
+contributions from all outgoing paths. Replacing \texttt{+=} with \texttt{=}
+would overwrite earlier contributions. For example, $z=a+a$ requires two
+contributions of $g_z$, even though the input-node set contains $a$ only once.
+The local addition function still updates $a$ twice.
+
+\newpage
+\section{Topological Sorting and Backpropagation}
+The computational graph is a directed acyclic graph. During the forward pass,
+inputs precede outputs; during backpropagation, each operation must receive all
+downstream gradient contributions before propagating its own gradient.
+
+\subsection{Depth-first post-order traversal}
+The \texttt{\_get\_topo()} method uses depth-first search (DFS). A node is marked
+as visited, its inputs are visited recursively, and the node is appended
+\emph{after} all of its inputs. The visited set ensures that a shared node is
+included only once.
+
+\begin{lstlisting}
+def build_topo(node):
+    if node not in visited:
+        visited.add(node)
+        for child in node._prev:
+            build_topo(child)
+        topo.append(node)
+\end{lstlisting}
+
+The global backward pass seeds the output derivative with
+$\partial L/\partial L=1$ and traverses the list in reverse:
+\begin{lstlisting}
+topo = self._get_topo()
+self.grad = 1.0
+for node in reversed(topo):
+    node._backward()
+\end{lstlisting}
+
+The specific order of independent nodes may vary because \texttt{\_prev} is a
+set, but all valid orders preserve the required dependencies. For $V$ nodes
+and $E$ input links, graph traversal takes $O(V+E)$ time and $O(V)$ auxiliary
+space, including the list, visited set, and recursion stack.
+
+\subsection{Worked shared-node example}
+Let $a=3$, $c=a+a$, and $d=ca$. Then
+\begin{equation}
+d=(a+a)a=2a^2=18,\qquad \frac{\mathrm{d}d}{\mathrm{d}a}=4a=12.
+\end{equation}
+Starting with $g_d=1$, multiplication contributes $a=3$ to $g_c$ and $c=6$
+directly to $g_a$. Addition then contributes $g_c$ twice to $a$, giving
+$g_a=6+3+3=12$. A valid topological list is $[a,c,d]$; its reverse executes
+the multiplication before the addition.
+
+\subsection{Gradient lifecycle}
+The engine accumulates gradients instead of clearing them implicitly.
+\texttt{reset\_grad()} clears one node, while network-level
+\texttt{zero\_grad()} clears trainable parameters. The training loop constructs
+a fresh graph each iteration. Reusing an already-backpropagated graph would
+require handling intermediate gradients as well; clearing parameters alone
+does not reset every node in an old graph. Parameter values must remain
+unchanged between a forward calculation and its backward pass.
+
+\newpage
+\section{Neural Network Design and Training}
+\subsection{Neuron, layer, and MLP}
+A neuron with $n$ inputs computes a weighted sum and applies $\tanh$:
+\begin{equation}
+z=\sum_{i=1}^{n}w_i x_i+b,\qquad \hat{y}=\tanh(z).
+\end{equation}
+Weights and bias are \texttt{Value} objects initialized independently using
+\texttt{random.uniform(-1, 1)}. The neuron checks that the number of inputs
+matches the number of weights. Using \texttt{Value} arithmetic automatically
+connects all parameters to the graph; no separate neuron-level backward
+method is needed.
+
+A \texttt{Layer} contains several neurons sharing the same input vector. It
+returns a list of outputs, or a single \texttt{Value} when it contains one
+neuron, as required by the template. An \texttt{MLP} applies layers sequentially.
+If a hidden layer returns a scalar, the MLP wraps it in a list before passing
+it to the next layer. All neurons, including the output neuron, use $\tanh$.
+
+The \texttt{parameters()} methods collect weights and biases into one flat
+list. Their \texttt{zero\_grad()} methods call \texttt{reset\_grad()} on these
+parameters. The network's learnable parameters persist across iterations.
+
+\subsection{Architecture and loss}
+The demonstration uses a $2\rightarrow4\rightarrow1$ MLP. Its parameter count is
+\begin{equation}
+4(2+1)+1(4+1)=12+5=17.
+\end{equation}
+For $N=4$ training examples, the mean squared error (MSE) is
+\begin{equation}
+L=\frac{1}{N}\sum_{k=1}^{N}(\hat{y}_k-y_k)^2,
+\qquad
+\frac{\partial L}{\partial\hat{y}_k}
+=\frac{2}{N}(\hat{y}_k-y_k).
+\end{equation}
+Combining this with the output activation gives
+\begin{equation}
+\frac{\partial L}{\partial z_k}
+=\frac{2}{N}(\hat{y}_k-y_k)(1-\hat{y}_k^2).
+\end{equation}
+For a neuron's weight, $\partial z_k/\partial w_i=x_{k,i}$, so gradients
+accumulate over all examples and propagate through earlier layers.
+
+\subsection{Gradient descent}
+For each trainable parameter $\theta$, full-batch gradient descent applies
+\begin{equation}
+\theta\leftarrow\theta-\eta\frac{\partial L}{\partial\theta},\qquad\eta=0.1.
+\end{equation}
+Each iteration computes predictions and loss, clears old gradients, and runs
+backpropagation. The parameter values are updated only after all current
+gradients are available. Clearing gradients prevents contributions from
+previous iterations from entering the current update.
+
+\newpage
+\section{XOR Experiment and Results}
+\subsection{Reproducible setup}
+The notebook loads the four XOR cases from an embedded CSV using
+\texttt{csv.DictReader}. Inputs are binary and targets are encoded as $-1$ and
+$+1$ to match the range of $\tanh$. Initialization uses
+\texttt{random.seed(42)}. Training uses all four examples in every update,
+500 updates, learning rate $0.1$, and no external dataset or autograd library.
+
+\begin{center}
+\begin{tabular}{@{}ccrr@{}}
+\toprule
+$x_1$ & $x_2$ & \textbf{Target} & \textbf{Final prediction} \\
+\midrule
+0 & 0 & $-1$ & $-0.9089$ \\
+0 & 1 & $+1$ & $+0.8592$ \\
+1 & 0 & $+1$ & $+0.9010$ \\
+1 & 1 & $-1$ & $-0.8604$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Measured learning behavior}
+The initial MSE is $1.121355$. After the final update, it is $0.014347$, a
+reduction of approximately $98.72\%$. Classifying a positive prediction as
+$+1$ and a non-positive prediction as $-1$ gives four correct classifications
+out of four training examples ($100\%$ training accuracy).
+
+\begin{figure}[h!]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  width=0.93\textwidth,height=62mm,
+  xlabel={Training step (before update)},ylabel={Mean squared error},
+  xmin=0,xmax=499,ymin=0,ymax=1.2,
+  xtick={0,100,200,300,400,499},ytick={0,0.3,0.6,0.9,1.2},
+  axis lines=left,grid=major,grid style={gray!18},
+  tick label style={font=\small},label style={font=\small},
+  every axis plot/.append style={line width=1.2pt}]
+\addplot[blue,no marks] coordinates {
+(0,1.121355168)
+(5,1.004406638)
+(10,0.960632803)
+(15,0.927940886)
+(20,0.901811276)
+(25,0.879643728)
+(30,0.859950154)
+(35,0.841891596)
+(40,0.825001181)
+(45,0.809025239)
+(50,0.793831440)
+(55,0.779354596)
+(60,0.765564336)
+(65,0.752446010)
+(70,0.739989804)
+(75,0.728184978)
+(80,0.717017222)
+(85,0.706467844)
+(90,0.696513944)
+(95,0.687129083)
+(100,0.678284119)
+(105,0.669948041)
+(110,0.662088709)
+(115,0.654673461)
+(120,0.647669556)
+(125,0.641044484)
+(130,0.634766115)
+(135,0.628802723)
+(140,0.623122882)
+(145,0.617695221)
+(150,0.612488036)
+(155,0.607468741)
+(160,0.602603084)
+(165,0.597854081)
+(170,0.593180522)
+(175,0.588534869)
+(180,0.583860217)
+(185,0.579085818)
+(190,0.574120311)
+(195,0.568841211)
+(200,0.563078126)
+(205,0.556585215)
+(210,0.548994761)
+(215,0.539737238)
+(220,0.527903010)
+(225,0.512012114)
+(230,0.489694033)
+(235,0.457551374)
+(240,0.412441046)
+(245,0.356048057)
+(250,0.298173938)
+(255,0.248749239)
+(260,0.210104205)
+(265,0.180178541)
+(270,0.156576537)
+(275,0.137580323)
+(280,0.122035935)
+(285,0.109145601)
+(290,0.098335571)
+(295,0.089180403)
+(300,0.081357710)
+(305,0.074619255)
+(310,0.068771442)
+(315,0.063661633)
+(320,0.059168306)
+(325,0.055193846)
+(330,0.051659184)
+(335,0.048499770)
+(340,0.045662519)
+(345,0.043103465)
+(350,0.040785957)
+(355,0.038679247)
+(360,0.036757391)
+(365,0.034998371)
+(370,0.033383405)
+(375,0.031896390)
+(380,0.030523453)
+(385,0.029252591)
+(390,0.028073370)
+(395,0.026976689)
+(400,0.025954574)
+(405,0.025000016)
+(410,0.024106829)
+(415,0.023269542)
+(420,0.022483293)
+(425,0.021743755)
+(430,0.021047061)
+(435,0.020389748)
+(440,0.019768709)
+(445,0.019181144)
+(450,0.018624527)
+(455,0.018096574)
+(460,0.017595215)
+(465,0.017118568)
+(470,0.016664923)
+(475,0.016232717)
+(480,0.015820524)
+(485,0.015427040)
+(490,0.015051065)
+(495,0.014691502)
+(499,0.014414984)
+};
+\end{axis}
+\end{tikzpicture}
+\caption{Recorded training loss for the seeded XOR experiment.}
+\end{figure}
+
+The loss drops gradually, followed by a sharper decrease as the network fits
+the XOR labels. Predictions approach their target signs without reaching
+exactly $\pm1$, which is consistent with finite-valued $\tanh$ activations.
+The curve records losses \emph{before} each update; the reported final MSE
+and predictions are evaluated \emph{after} update 500.
+
+This experiment demonstrates successful fitting of the XOR truth table.
+There is no train/test split, so these results do not establish generalization
+performance on unseen data or larger tasks.
+
+\newpage
+\section{Validation, Discussion, and Limitations}
+\subsection{Provided tests}
+Running \texttt{python -m pytest -q} from the repository root gives
+\textbf{12 passed}: nine engine tests and three network tests. Coverage includes
+arithmetic, activations, type handling, shared-node gradients, the chain rule,
+division by zero, parameter counts, and network backpropagation. These local
+results are separate from the GitHub grading process.
+
+\subsection{Independent numerical gradient check}
+For an additional check, define
+\begin{equation}
+f(x)=\frac{\tanh(x^2+e^x)}{x+2}.
+\end{equation}
+At $x=0.4$, the engine's derivative was compared with the central difference
+\begin{equation}
+f'(x)\approx\frac{f(x+h)-f(x-h)}{2h},\qquad h=10^{-6}.
+\end{equation}
+The engine produced $-0.030708460903$; the numerical approximation was
+$-0.030708460885$. The absolute difference, approximately
+$1.79\times10^{-11}$, supports the correctness of this composite derivative
+at the tested point.
+
+\subsection{Conceptual discussion}
+\textbf{Why reverse-mode differentiation?} A scalar loss can depend on many
+parameters. One reverse traversal propagates derivatives to every reachable
+parameter, reusing the recorded forward graph.
+
+\textbf{Why a nonlinear activation?} Composing affine layers without
+nonlinearity still produces an affine function. XOR is not linearly
+separable, so a nonlinear hidden representation is needed to fit its labels.
+
+\textbf{Why both a visited set and gradient accumulation?} The visited set
+ensures a node's backward function executes once. Accumulation sums the
+contributions from every operation that uses that node. These solve distinct
+problems in shared computation graphs.
+
+\subsection{Scope and limitations}
+The engine uses scalars rather than vectorized tensors. Recursive DFS is
+limited by Python's recursion depth. Exponentials can overflow, and saturated
+$\tanh$ units can have very small gradients. Higher-order differentiation,
+differentiable exponents, and automatic old-graph gradient clearing are not
+implemented.
+
+\textbf{Conclusion.} Local derivative rules and reverse topological traversal
+provide a reusable foundation for neurons and an MLP. The tests, numerical
+check, and XOR experiment support the correctness of the implementation
+within the demonstrated scope.
+
+\vspace{-3mm}
+\begin{thebibliography}{9}
+\small
+\raggedright
+\bibitem{assignment} CSE485--CSE488 course staff. \emph{Deep Learning - Assignment 1:
+MicroGrad (Scalar Autograd Engine)}. Assignment handout, pp. 1--3.
+\bibitem{template} DL-Course-ASU. \emph{Assignment 1 MicroGrad Template}.
+\url{https://github.com/DL-Course-ASU/assignment-1-micrograd-template}.
+\end{thebibliography}
+\end{document}
