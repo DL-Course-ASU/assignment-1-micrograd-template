@@ -1,0 +1,8 @@
+# Core engine (src/) uses only the Python standard library.
+# Tests
+pytest>=7
+# Demo notebook only (dataset generation and plotting)
+numpy>=1.24
+matplotlib>=3.7
+scikit-learn>=1.3
+jupyter
