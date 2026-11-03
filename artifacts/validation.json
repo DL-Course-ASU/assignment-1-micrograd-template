@@ -11,5 +11,11 @@
   "saved_weights_match_metrics": true,
   "report_pages": 11,
   "pdf_visual_review": "all 11 rendered pages inspected",
-  "latex_layout_warnings": 0
+  "latex_layout_warnings": 0,
+  "github_submission_url": "https://github.com/glacialhex/assignment-1-micrograd-template/tree/Yousef-Mohamed-Mahmoud-Helmy-Ismail_20P7954",
+  "pdf_hyperlink_pages_verified": [
+    1,
+    10,
+    11
+  ]
 }

@@ -4,6 +4,8 @@ Student: **Yousef Mohamed Mahmoud Helmy Ismail**<br>
 ID: **20P7954**<br>
 Branch: `Yousef-Mohamed-Mahmoud-Helmy-Ismail_20P7954`
 
+[Open the completed assignment branch on GitHub](https://github.com/glacialhex/assignment-1-micrograd-template/tree/Yousef-Mohamed-Mahmoud-Helmy-Ismail_20P7954).
+
 This submission implements the supplied course template at commit
 `2a9d379546bdc61b8e3ff846e551051ac0602bc6`.
 The original README, tests, workflow, and package initializers are preserved.
@@ -82,7 +84,8 @@ The evidence screenshots show an executed notebook and a browser rendering of
 verbatim CLI logs. They are explicitly labeled as browser screenshots; native
 terminal automation was unavailable under the computer-use rules. The actual CLI
 logs and JUnit results are included separately. Local passing tests do not claim
-that hosted GitHub Actions ran. The prepared branch is committed locally; pushing
-it, opening a course PR, and uploading to the LMS remain submission actions.
+that hosted GitHub Actions ran. The prepared branch is committed and published
+on the linked GitHub fork. Opening a course PR and uploading to the LMS remain
+submission actions.
 
 Prepared with AI coding assistance. The report records this provenance.
