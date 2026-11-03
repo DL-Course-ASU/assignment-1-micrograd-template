@@ -1,0 +1,442 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{tikz}
+\usepackage{hyperref}
+
+\lstset{
+  language=Python,
+  basicstyle=\ttfamily\small,
+  keywordstyle=\color{blue!60!black},
+  commentstyle=\color{black!60},
+  stringstyle=\color{orange!70!black},
+  showstringspaces=false,
+  frame=single,
+  rulecolor=\color{black!25},
+  breaklines=true,
+}
+
+% A visibly highlighted box for anything the student still has to fill in.
+\newcommand{\placeholder}[1]{%
+  \begin{center}\fcolorbox{orange!70!black}{orange!10}{%
+    \parbox{0.9\linewidth}{\textbf{To fill in:} #1}}\end{center}}
+
+\title{Assignment 1: MicroGrad\\[0.3em]
+  \large A Scalar Automatic Differentiation Engine\\
+  CSE485-CSE488 Deep Learning}
+\author{Toka Elsayed Abdelrahman\\Student ID: 23P0044}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This report describes a small reverse-mode automatic differentiation engine for scalar
+values and a neural network API built on top of it. It derives the local derivatives of
+each operation, explains why backpropagation needs a reversed post-order traversal, and
+justifies the main design decisions. An MLP with two hidden layers, trained with the engine, classifies
+the two-moons dataset with 99\% training and 100\% test accuracy, and its gradients agree
+with PyTorch to within the required tolerance of $10^{-6}$.
+\end{abstract}
+
+% =========================================================================
+\section{Mathematical Derivations}
+% =========================================================================
+
+\subsection{The chain rule on a graph}
+
+Each operation creates a node, so a computation forms a directed acyclic graph from the
+inputs to a single output $L$. Let $v$ be a node and let $u_1,\dots,u_k$ be the
+operations that consume $v$, with one entry per edge. The multivariable chain rule gives
+\begin{equation}
+  \frac{\partial L}{\partial v}
+  = \sum_{i=1}^{k} \frac{\partial L}{\partial u_i}\,\frac{\partial u_i}{\partial v}.
+  \label{eq:chain}
+\end{equation}
+Each term has two factors. The factor $\partial L/\partial u_i$ is the gradient already
+stored on the consumer (\texttt{out.grad}), and $\partial u_i/\partial v$ is a local
+derivative that depends only on that one operation. So every operation only has to know
+its own derivative, and Equation~\eqref{eq:chain} supplies the rest. The sum is the reason
+gradients accumulate, as Section~\ref{sec:accumulate} explains.
+
+\subsection{Local derivatives}
+
+\paragraph{Addition.} For $u = a + b$,
+\[
+  \frac{\partial u}{\partial a} = 1, \qquad \frac{\partial u}{\partial b} = 1.
+\]
+The closure therefore adds \texttt{out.grad} unchanged to both inputs.
+
+\paragraph{Multiplication.} For $u = ab$,
+\[
+  \frac{\partial u}{\partial a} = b, \qquad \frac{\partial u}{\partial b} = a.
+\]
+Each input receives \texttt{out.grad} scaled by the value of the \emph{other} input.
+
+\paragraph{Power.} For $u = a^n$ with a constant exponent $n$, the power rule gives
+\[
+  \frac{\partial u}{\partial a} = n\,a^{\,n-1}.
+\]
+Only constant exponents are supported: for a variable exponent, $u$ would also depend on
+$n$, with $\partial u/\partial n = a^n \ln a$, which this rule does not cover. The engine
+enforces this with an \texttt{assert}. The case $n = 0$ is skipped, because $a^0$ is the
+constant $1$ with derivative $0$, while evaluating $0 \cdot 0^{-1}$ at $a = 0$ would raise
+a division by zero.
+
+\paragraph{Hyperbolic tangent.} Since $\tanh a = \sinh a / \cosh a$, the quotient rule gives
+\[
+  \frac{d}{da}\tanh a
+  = \frac{\cosh a \cdot \cosh a - \sinh a \cdot \sinh a}{\cosh^2 a}
+  = 1 - \frac{\sinh^2 a}{\cosh^2 a}
+  = 1 - \tanh^2 a.
+\]
+This form is convenient because the closure can reuse the value $t = \tanh a$ that the
+forward pass has already computed. It also shows saturation directly: when $|a|$ is large,
+$\tanh^2 a \to 1$ and the gradient approaches $0$.
+
+\paragraph{Exponential.} For $u = e^a$,
+\[
+  \frac{\partial u}{\partial a} = e^a = u,
+\]
+so the local derivative is simply the node's own data, \texttt{out.data}.
+
+\paragraph{Derived operations.} These need no closure of their own, because they are
+composed from the operations above and the graph records each step:
+\begin{align*}
+  -a &= a \cdot (-1), &
+  a - b &= a + (-b), &
+  \frac{a}{b} &= a \cdot b^{-1}.
+\end{align*}
+Applying the rules to division reproduces the quotient rule:
+$\partial(a b^{-1})/\partial a = 1/b$ and $\partial(a b^{-1})/\partial b = -a/b^{2}$.
+The test suite checks both values.
+
+% =========================================================================
+\section{Topological Sort}
+% =========================================================================
+
+\subsection{Why reversed post-order is needed}
+
+Equation~\eqref{eq:chain} shows that a node's gradient is complete only once \emph{all} of
+its consumers have contributed. A node may pass its gradient on only after that point.
+So backpropagation must process every consumer before the nodes it consumes.
+
+A depth-first search that appends a node \emph{after} visiting its children produces a
+post-order: every node appears after all of its inputs. Reversing that list gives the
+order required above, starting at the output and ending at the leaves.
+
+\begin{lstlisting}
+def _get_topo(self):
+    topo = []
+    visited = set()
+    def build(node):
+        if node not in visited:
+            visited.add(node)
+            for child in node._prev:
+                build(child)
+            topo.append(node)   # after the loop: post-order
+    build(self)
+    return topo
+\end{lstlisting}
+
+\subsection{A diamond graph example}
+
+Take $a = 3$, $x = 2a$, $y = x + 1$ and $z = x \cdot y$, shown in
+Figure~\ref{fig:diamond}. The node $x$ is reached along two paths, directly and through
+$y$. Analytically, $z = 4a^2 + 2a$, so $dz/da = 8a + 2 = 26$.
+
+\begin{figure}[ht]
+  \centering
+  \begin{tikzpicture}[
+      every node/.style={draw, rounded corners, minimum width=1.6cm, minimum height=0.8cm},
+      >=stealth]
+    \node (a) at (0,0)   {$a = 3$};
+    \node (x) at (3,0)   {$x = 6$};
+    \node (y) at (6,1.2) {$y = 7$};
+    \node (z) at (9,0)   {$z = 42$};
+    \draw[->] (a) -- (x);
+    \draw[->] (x) -- (y);
+    \draw[->] (x) -- (z);
+    \draw[->] (y) -- (z);
+  \end{tikzpicture}
+  \caption{A diamond graph: $x$ feeds both $y$ and $z$.}
+  \label{fig:diamond}
+\end{figure}
+
+A valid order is $z, y, x, a$. Applying it step by step gives:
+\begin{center}
+\begin{tabular}{lll}
+  \toprule
+  Node run & Update & Result \\
+  \midrule
+  $z$ (mul) & $x.\mathrm{grad} \mathrel{+}= y \cdot 1$,\;
+              $y.\mathrm{grad} \mathrel{+}= x \cdot 1$ & $x.\mathrm{grad} = 7$,\; $y.\mathrm{grad} = 6$ \\
+  $y$ (add) & $x.\mathrm{grad} \mathrel{+}= 6$ & $x.\mathrm{grad} = 13$ \\
+  $x$ (mul) & $a.\mathrm{grad} \mathrel{+}= 2 \cdot 13$ & $a.\mathrm{grad} = 26$ \\
+  \bottomrule
+\end{tabular}
+\end{center}
+This matches the analytical result. The important detail is that $y$ runs before $x$, so
+$x.\mathrm{grad}$ has reached its full value of 13 when it is passed on to $a$.
+
+\subsection{The two traps}
+
+Both traps were reproduced by running deliberately broken traversals on the graph above,
+200 times each. A fresh graph was built on every run, and because \texttt{\_prev} is a
+set, its iteration order can differ between runs. Table~\ref{tab:traps} shows every result
+observed, against the correct answer of 26.
+
+\begin{table}[ht]
+  \centering
+  \begin{tabular}{lll}
+    \toprule
+    Traversal & $a.\mathrm{grad}$ observed & Correct? \\
+    \midrule
+    Reversed post-order with visited set & 26 (200 of 200 runs) & Always \\
+    Pre-order, reversed & 0 (200 of 200 runs) & Never \\
+    Pre-order, not reversed & 14 (110 runs) or 26 (90 runs) & Only by luck \\
+    Post-order without visited set & 52 (101 runs) or 40 (99 runs) & Never \\
+    \bottomrule
+  \end{tabular}
+  \caption{Gradient of $z$ with respect to $a$ under correct and broken traversals.}
+  \label{tab:traps}
+\end{table}
+
+\paragraph{The post-order trap.} This trap comes from appending a node \emph{before} the
+loop over its children, which produces a pre-order. Reversing a pre-order puts the output
+last, so every other node runs while its gradient is still zero, and $a.\mathrm{grad}$
+stays 0. Not reversing it is more dangerous, because it is sometimes correct. If the
+search happens to visit $y$ first, the order is $z, y, x, a$, which gives 26. If it visits
+$x$ first, the order is $z, x, a, y$. Then $x$ passes on its incomplete gradient of 7,
+giving $a.\mathrm{grad} = 14$, and the contribution from $y$ arrives too late. A test that
+passes with this bug can therefore fail on the next run, depending only on set order.
+
+\paragraph{The visited-set trap.} Without a visited set, $x$ is appended once per path
+that reaches it, so \texttt{x.\_backward()} runs twice and adds its gradient to $a$ twice.
+If both runs come after $y$, the result is $26 + 26 = 52$. If one comes before $y$, it is
+$14 + 26 = 40$. The search also becomes much slower, because shared subgraphs are explored
+again for every path, and the number of paths can grow exponentially with depth.
+
+% =========================================================================
+\section{Design Justifications}
+% =========================================================================
+
+\subsection{Why gradients accumulate with \texttt{+=}}
+\label{sec:accumulate}
+
+Equation~\eqref{eq:chain} is a sum, with one term per consumer, and each closure supplies
+exactly one term. Using \texttt{=} would keep only the last term and discard the others.
+
+The simplest case is $c = a + a$. Here \texttt{\_prev} is the set $\{a\}$ with one element,
+but the closure still performs two updates, because \texttt{self} and \texttt{other} are
+the same object. With \texttt{+=} the result is $a.\mathrm{grad} = 2$, which is correct.
+With \texttt{=} it would be 1.
+
+This has a consequence for training: because parameters persist between steps, their
+gradients must be cleared with \texttt{zero\_grad()} before each backward pass, or the
+gradients of earlier steps would be added in.
+
+\subsection{Why closures}
+
+Each operation needs to remember its inputs and how to differentiate through them. A
+closure captures exactly those variables (\texttt{self}, \texttt{other} and \texttt{out})
+behind a uniform interface: a function with no arguments. This has two benefits.
+\begin{itemize}
+  \item \texttt{backward()} stays generic. It calls \texttt{node.\_backward()} on every
+    node and never needs to know which operation it is dealing with, so adding an operation
+    does not change the traversal at all.
+  \item The derivative code sits next to the forward code it belongs to.
+\end{itemize}
+Crucially, the closure reads \texttt{out.grad} when it \emph{runs}, not when it is
+created. That value is unknown during the forward pass, so the gradient calculation has to
+be deferred until the backward pass.
+
+\subsection{Why a visited set}
+
+The set gives each node exactly one position in the order, however many paths reach it.
+This is what makes each \texttt{\_backward()} run exactly once, which the previous section
+showed to be necessary for correct results. It also keeps the traversal linear in the size
+of the graph. Node identity is used for membership: \texttt{Value} deliberately does not
+override \texttt{\_\_eq\_\_}, so two different nodes holding the same number remain
+distinct.
+
+\subsection{Why the last layer is linear}
+
+Hidden layers use $\tanh$ to provide non-linearity. Stacking linear layers alone would just
+produce another linear function, and no straight line separates the two moons. The output
+layer has a different job: it produces the final score, and a $\tanh$ there would cause two
+problems.
+\begin{itemize}
+  \item It would restrict every output to $(-1, 1)$, so the targets $\pm 1$ could only be
+    approached in the limit, and a regression target outside this range could never be
+    reached.
+  \item As the output approaches $\pm 1$, its derivative $1 - \tanh^2$ approaches $0$,
+    which shrinks the gradient for the whole network just as the prediction gets close.
+\end{itemize}
+A linear output has a local derivative of exactly 1. Classification only needs the sign of
+the score, so nothing is lost.
+
+\subsection{Weight initialization}
+
+Weights and biases are drawn from the uniform distribution on $[-1, 1]$. Randomness is
+required to break symmetry: if all neurons in a layer started with the same weights, they
+would compute the same output and receive the same gradient, and so would remain identical
+forever. The range is centred on zero, which gives both signs, and is small enough that
+with few inputs, most neurons do not start deep in the saturated region of $\tanh$.
+
+This scheme has a limitation. The variance of a neuron's weighted sum grows with its number
+of inputs, which is why larger networks use initializations scaled by layer width, such as
+Xavier/Glorot. The simple range is adequate for the small network used here, but would be
+worse for much wider layers.
+
+\subsection{Known limitations}
+
+These were each confirmed by running the code. They follow from the required design and do
+not affect the experiments below.
+\begin{itemize}
+  \item \textbf{Repeated \texttt{backward()} on one graph.} Interior nodes keep their
+    gradients, so a second call does not simply double the result. For $y = 5 \cdot 2a$, the
+    first call gives $a.\mathrm{grad} = 10$, and the second gives 30 rather than 20. Training
+    is unaffected because it builds a new graph on every step.
+  \item \textbf{Recursion depth.} \texttt{\_get\_topo} is recursive, so a very deep graph
+    exceeds Python's recursion limit. A chain of 1200 additions raised
+    \texttt{RecursionError}. The loss in the notebook is well within the limit, but summing
+    the loss over about 1000 samples would not be.
+  \item \textbf{Fractional powers of negative numbers.} Python returns a complex number for
+    these, which the engine does not support.
+\end{itemize}
+
+% =========================================================================
+\section{Experiments}
+% =========================================================================
+
+All results come from \texttt{demo.ipynb}, which fixes the random seed to 42.
+
+\subsection{Verification}
+
+The 12 tests supplied with the template and the 37 additional tests in
+\texttt{tests/test\_extra.py} all pass. The additional tests compare nine expressions and a
+full MLP against PyTorch with a tolerance of $10^{-6}$. PyTorch is used only in the tests
+and the notebook, never in the engine.
+
+The notebook also compares one composite expression, $d^2 + 2a$ where
+$d = \tanh(ab + b^3)\,e^a - b/a$, at $a = 1.3$ and $b = -0.7$. PyTorch tensors used double
+precision, matching Python floats.
+
+\begin{table}[ht]
+  \centering
+  \begin{tabular}{lrrr}
+    \toprule
+    Quantity & MicroGrad & PyTorch & Difference \\
+    \midrule
+    Output & 9.242071825866 & 9.242071825866 & 0 \\
+    $\partial/\partial a$ & 23.888209298085 & 23.888209298085 & 0 \\
+    $\partial/\partial b$ & $-10.651223587653$ & $-10.651223587653$ & 0 \\
+    \bottomrule
+  \end{tabular}
+  \caption{Gradient check against PyTorch, shown to 12 decimal places.}
+\end{table}
+
+\subsection{Setup}
+
+\begin{itemize}
+  \item \textbf{Data:} \texttt{make\_moons} with noise 0.1, using 100 training points and a
+    separate set of 200 test points. Labels are mapped to $\pm 1$.
+  \item \textbf{Model:} \texttt{MLP(2, [8, 8, 1])}, with 105 trainable parameters.
+  \item \textbf{Training:} full-batch gradient descent on the mean squared error for 300 steps.
+\end{itemize}
+
+\subsection{Results}
+
+Figure~\ref{fig:loss} shows the training loss at the chosen learning rate of 0.05. It falls
+quickly at first and then steadily, and it never rises after step 20.
+Figure~\ref{fig:boundary} shows the learned decision boundary, which follows the curved gap
+between the two classes. Away from the data, for example in the lower left, the boundary
+has no points to constrain it, so its shape there should not be read as meaningful.
+Figure~\ref{fig:graph} shows a small computational graph: the node $a$ feeds two
+operations, and its gradient is the sum over both paths,
+$0.94 + 0.94 \times (-1.5) = -0.47$.
+
+\begin{figure}[ht]
+  \centering
+  \includegraphics[width=0.62\linewidth]{figures/loss_curve.pdf}
+  \caption{Training loss with learning rate 0.05.}
+  \label{fig:loss}
+\end{figure}
+
+\begin{figure}[ht]
+  \centering
+  \includegraphics[width=0.62\linewidth]{figures/decision_boundary.pdf}
+  \caption{Decision boundary of the trained network, with the training points.}
+  \label{fig:boundary}
+\end{figure}
+
+\begin{figure}[ht]
+  \centering
+  \includegraphics[width=0.95\linewidth]{figures/computational_graph.pdf}
+  \caption{Computational graph of $e = \tanh(ab + a)$ after \texttt{backward()}.}
+  \label{fig:graph}
+\end{figure}
+
+\subsection{Effect of the learning rate}
+
+The same initial weights were also trained with a learning rate of 0.1.
+Table~\ref{tab:lr} and Figure~\ref{fig:lr} compare the two runs.
+
+\begin{table}[ht]
+  \centering
+  \begin{tabular}{rrrrl}
+    \toprule
+    Learning rate & Final loss & Train acc. & Test acc. & Largest loss after step 20 \\
+    \midrule
+    0.05 & 0.0808 & 99\% & 100\% & 0.2718 at step 20 (no later rise) \\
+    0.1  & 0.0457 & 100\% & 100\% & 1.0509 at step 81 \\
+    \bottomrule
+  \end{tabular}
+  \caption{Comparison of the two learning rates over 300 steps.}
+  \label{tab:lr}
+\end{table}
+
+\begin{figure}[ht]
+  \centering
+  \includegraphics[width=0.62\linewidth]{figures/learning_rates.pdf}
+  \caption{Training loss for two learning rates from the same initial weights.}
+  \label{fig:lr}
+\end{figure}
+
+The larger learning rate reaches a lower final loss, but its loss jumps to about 1.05 near
+step 81 before recovering. Between steps 67 and 81 the gradient norm rose from 0.18 to 5.84,
+roughly doubling every two steps. This is consistent with a step size that had become too
+large for the local curvature, although the curvature itself was not measured. The jump
+also depends on the initialization: in a separate 150-step check at the same learning rate,
+seeds 1 and 2 showed no rise in loss after step 20. The main run uses 0.05 because it is
+stable, accepting a slightly higher loss after 300 steps.
+
+\subsection{Discussion}
+
+Test accuracy of 100\% should be read with some care. With noise 0.1 the two moons are well
+separated, so this is an easy dataset, and the test set has only 200 points. The result
+shows that the engine and training loop work, not that the model is strong in general.
+
+Two re-runs of the notebook printed identical losses and accuracies. Strictly, the order in
+which gradients are added can vary because \texttt{\_prev} is a set, which could in principle
+change results in the last bits of a float, but this was not visible at the precision
+reported here. The scalar engine is also slow: each 300-step run took about two minutes,
+because every multiplication and addition in the network is a separate Python object.
+
+% =========================================================================
+\section{Conceptual Questions}
+% =========================================================================
+
+The template's \texttt{README.md} does not list any conceptual questions. If the course
+handout or the instructor has set any, add them here.
+
+\placeholder{Copy any conceptual questions from the course handout here, and answer each in
+your own words. If there are none, delete this section.}
+
+\end{document}
