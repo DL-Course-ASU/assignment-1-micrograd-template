@@ -1,0 +1,240 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=2.2cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+% Look for images next to the .tex file or one level down, so it compiles
+% whether the project root is report/ or the repo root (e.g. on Overleaf).
+\graphicspath{{figures/}{report/figures/}{./}}
+\usepackage{booktabs}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{hyperref}
+
+\lstset{
+  language=Python, basicstyle=\ttfamily\small, keywordstyle=\color{blue!70!black},
+  commentstyle=\color{gray}, frame=single, breaklines=true, columns=fullflexible
+}
+
+\title{CSE485/CSE488 Deep Learning\\[2pt]
+\large Assignment 1: MicroGrad --- A Scalar Autograd Engine}
+\author{Mohamed Wael Ahmed \\ Student ID: \texttt{23P0043}}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\section{Overview}
+This report documents a from-scratch scalar reverse-mode automatic differentiation engine
+(\texttt{src/engine.py}) and a small neural-network API built on top of it (\texttt{src/nn.py}).
+Every scalar in a computation is wrapped in a \texttt{Value} node that records its data, its
+gradient, the nodes that produced it (\texttt{\_prev}), and a closure (\texttt{\_backward}) that
+applies the local chain-rule step. Calling \texttt{backward()} on the output orders the graph
+topologically and runs those closures in reverse. The implementation passes all 12 tests of the
+provided \texttt{pytest} suite.
+
+\section{The Computational Graph}
+
+\subsection{Chain rule in reverse mode}
+Let $L$ be the final scalar output and let a node $z = g(x_1,\dots,x_k)$. Reverse mode stores
+in every node the \emph{adjoint} $\bar z = \partial L / \partial z$ (the \texttt{grad} field).
+When $z$ is processed, it pushes its adjoint to each input:
+\begin{equation}
+  \bar x_i \mathrel{+}= \frac{\partial g}{\partial x_i}\,\bar z .
+\end{equation}
+The accumulation ($+=$) implements the multivariate chain rule: if $x$ feeds several nodes
+$z_1,\dots,z_m$, then
+$\displaystyle \frac{\partial L}{\partial x} = \sum_{j=1}^{m} \frac{\partial L}{\partial z_j}\frac{\partial z_j}{\partial x}$.
+The seed is $\bar L = \partial L/\partial L = 1$.
+
+\subsection{Local derivatives}
+Table~\ref{tab:derivs} lists the operators and the local derivative each \texttt{\_backward}
+closure uses.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}lll@{}}
+\toprule
+Operation & Forward & Backward (adjoint update) \\ \midrule
+Addition       & $z = a + b$     & $\bar a \mathrel{+}= \bar z,\quad \bar b \mathrel{+}= \bar z$ \\
+Multiplication & $z = a\,b$      & $\bar a \mathrel{+}= b\,\bar z,\quad \bar b \mathrel{+}= a\,\bar z$ \\
+Power ($n\in\mathbb{R}$ const.) & $z = a^{n}$ & $\bar a \mathrel{+}= n\,a^{n-1}\,\bar z$ \\
+Exponential    & $z = e^{a}$     & $\bar a \mathrel{+}= e^{a}\,\bar z = z\,\bar z$ \\
+Tanh           & $z = \tanh a$   & $\bar a \mathrel{+}= (1 - z^{2})\,\bar z$ \\ \bottomrule
+\end{tabular}
+\caption{Primitive operations and their local gradients.}
+\label{tab:derivs}
+\end{table}
+
+\paragraph{Derivation of $\tanh'$.}
+With $\tanh a = \dfrac{e^{a}-e^{-a}}{e^{a}+e^{-a}}$, the quotient rule gives
+\[
+\frac{d}{da}\tanh a
+= \frac{(e^{a}+e^{-a})^2-(e^{a}-e^{-a})^2}{(e^{a}+e^{-a})^2}
+= 1-\tanh^2 a .
+\]
+Both $\tanh$ and $\exp$ reuse the forward result ($z$) in the backward pass, so no extra
+transcendental function is evaluated during backpropagation.
+
+\subsection{Composite operators}
+Negation, subtraction and division are not new primitives; they are expressed through the ones
+above so that their gradients come for free:
+\[
+-a = a\cdot(-1),\qquad a - b = a + (-b),\qquad \frac{a}{b} = a\cdot b^{-1}.
+\]
+For division this yields
+$\bar a \mathrel{+}= b^{-1}\bar z$ and $\bar b \mathrel{+}= a\cdot(-b^{-2})\,\bar z = -\frac{a}{b^2}\bar z$,
+which is the familiar quotient rule. The reflected operators (\texttt{\_\_radd\_\_},
+\texttt{\_\_rmul\_\_}, \texttt{\_\_rsub\_\_}, \texttt{\_\_rtruediv\_\_}) make expressions like
+\texttt{2.0 + a} work.
+
+\section{Topological Sort and \texttt{backward()}}
+A node may only propagate its adjoint once that adjoint is final, i.e.\ after every node that
+consumes it has already pushed its contribution. This is exactly the reverse of a topological
+order of the DAG. The order is built with a post-order depth-first search:
+
+\begin{lstlisting}
+def _get_topo(self):
+    topo, visited = [], set()
+    def build_topo(node):
+        if node not in visited:
+            visited.add(node)
+            for child in node._prev:
+                build_topo(child)
+            topo.append(node)      # post-order
+    build_topo(self)
+    return topo
+
+def backward(self):
+    topo = self._get_topo()
+    self.grad = 1.0
+    for node in reversed(topo):
+        node._backward()
+\end{lstlisting}
+
+\paragraph{Why post-order.}
+Appending a node \emph{after} recursing into its inputs guarantees every input appears in
+\texttt{topo} before the node itself. Reversing the list therefore visits the output first and
+each node only after all of its consumers. Appending before the recursion (pre-order) would allow
+a node to run \texttt{\_backward} while its adjoint is still incomplete, silently producing wrong
+gradients.
+
+\paragraph{Why the \texttt{visited} set.}
+In a ``diamond'' graph such as $c = a + a,\; d = c\cdot a$, the node $a$ is reachable along
+several paths. Without \texttt{visited}, $a$ would be appended (and its \texttt{\_backward}
+executed) multiple times, and in larger graphs the DFS cost grows exponentially with the number
+of shared paths. With the set each node is processed exactly once in $O(V+E)$, and the $+=$ in the
+closures correctly sums the separate paths. For this example
+$d = 2a^2 \Rightarrow \partial d/\partial a = 4a = 12$ at $a=3$, which the engine reproduces.
+
+\paragraph{Why \texttt{+=} rather than \texttt{=}.}
+Even within one node, \texttt{a + a} lists the same object as both operands; assigning instead of
+accumulating would overwrite the first contribution with the second and give $1$ instead of $2$.
+
+\section{Design Decisions}
+\begin{itemize}
+  \item \textbf{Type safety.} A helper \texttt{\_wrap} promotes \texttt{int}/\texttt{float} to
+        constant leaf nodes and returns \texttt{None} for anything else; the operator then
+        returns \texttt{NotImplemented}, so Python raises a proper \texttt{TypeError} for
+        \texttt{Value + "string"} or \texttt{Value * [1,2,3]}. \texttt{bool} is excluded on
+        purpose to avoid accidental arithmetic on flags.
+  \item \textbf{Constant exponents only.} \texttt{\_\_pow\_\_} asserts the exponent is a Python
+        number. Supporting $a^{b}$ with $b$ a \texttt{Value} would require
+        $\partial z/\partial b = a^{b}\ln a$, which is undefined for $a\le 0$; the assignment
+        restricts the engine to the safe case.
+  \item \textbf{Division by zero.} Because $a/b = a\cdot b^{-1}$, evaluating \texttt{0.0**-1}
+        raises Python's \texttt{ZeroDivisionError} immediately during the forward pass instead of
+        propagating \texttt{inf}/\texttt{nan} through the graph.
+  \item \textbf{Closures for backward.} Each operator defines \texttt{\_backward} as a closure
+        capturing its operands and output, keeping the derivative next to the forward rule and
+        avoiding a large dispatch on \texttt{\_op}.
+  \item \textbf{Neuron bias as sum start.} \texttt{Neuron.\_\_call\_\_} computes
+        \texttt{sum((w*x for ...), self.b)}, so the bias is the initial accumulator and the
+        whole pre-activation stays one connected graph with no stray constant \texttt{0} node.
+\end{itemize}
+
+\section{Neural Network API}
+\begin{itemize}
+  \item \textbf{Neuron}$(n_{in})$: weights $w_i\sim\mathcal{U}(-1,1)$ and bias
+        $b\sim\mathcal{U}(-1,1)$; output $\tanh\!\left(\sum_i w_i x_i + b\right)$;
+        $n_{in}+1$ parameters.
+  \item \textbf{Layer}$(n_{in}, n_{out})$: $n_{out}$ independent neurons sharing the input;
+        returns a single \texttt{Value} when $n_{out}=1$, otherwise a list.
+  \item \textbf{MLP}$(n_{in}, [n_1,\dots,n_L])$: layers of sizes
+        $n_{in}\!\to\! n_1 \!\to\!\dots\!\to\! n_L$ applied sequentially. For
+        \texttt{MLP(3,[4,4,1])} the parameter count is $(3\cdot4+4)+(4\cdot4+4)+(4+1)=41$.
+\end{itemize}
+Every module exposes \texttt{parameters()} (a flat list) and \texttt{zero\_grad()}. Zeroing is
+required before each \texttt{backward()} because gradients accumulate by design.
+
+\section{Experiments}
+All experiments are reproduced in \texttt{demo.ipynb}.
+
+\subsection{Gradient verification}
+For $f(a,b)=(ab)(a+b)+e^{a/b}-\tanh^2 b$ at $(a,b)=(-2,3)$ the engine gives
+$\partial f/\partial a=-2.828861$ and $\partial f/\partial b=-7.905542$, identical to six
+decimals with central finite differences. On the trained 337-parameter network, five randomly
+sampled parameters matched the finite-difference estimate to within $10^{-12}$.
+
+\subsection{Two-moons classification}
+\begin{itemize}
+  \item Data: \texttt{make\_moons}, 100 points, noise $0.1$, labels mapped to $\{-1,+1\}$.
+  \item Model: \texttt{MLP(2,[16,16,1])}, 337 parameters, $\tanh$ everywhere.
+  \item Loss: mean squared error $+\;10^{-4}\sum_i w_i^2$.
+  \item Optimiser: full-batch gradient descent, 100 epochs, learning rate decayed linearly from
+        $0.5$ to $0.05$.
+\end{itemize}
+The loss fell from $1.10$ to $0.033$ and training accuracy rose from $66\%$ to $100\%$ by
+epoch 50 (Figures~\ref{fig:curves} and~\ref{fig:boundary}). The network learns the
+non-linear, interleaved boundary that no linear classifier could represent.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.95\linewidth]{training_curves.png}
+\caption{Training loss and accuracy over 100 epochs.}
+\label{fig:curves}
+\end{figure}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.55\linewidth]{decision_boundary.png}
+\caption{Learned decision boundary on the two-moons dataset.}
+\label{fig:boundary}
+\end{figure}
+
+\section{Conceptual Questions}
+
+\paragraph{Q1. Why reverse mode instead of forward mode?}
+A network has one scalar loss but many parameters. Reverse mode computes the gradient with
+respect to \emph{all} inputs in a single backward sweep (cost $\approx$ a small constant times
+the forward pass), whereas forward mode needs one sweep per input.
+
+\paragraph{Q2. Why must gradients be zeroed between steps?}
+Because \texttt{\_backward} accumulates with \texttt{+=}, a second \texttt{backward()} would add
+the new gradient to the old one. \texttt{zero\_grad()} resets every parameter to $0$ so each step
+uses only the current gradient.
+
+\paragraph{Q3. What goes wrong without topological ordering?}
+If a node runs \texttt{\_backward} before all its consumers have, it propagates a partial
+adjoint, and the contributions that arrive later never reach its inputs. The result is
+incorrect gradients without any error being raised.
+
+\paragraph{Q4. Why is $\tanh$ a reasonable activation here, and what are its limits?}
+It is smooth, zero-centred and bounded, and its derivative $1-\tanh^2$ is cheap to compute from
+the forward value. Its weakness is saturation: for $|x|\gg 1$ the derivative approaches $0$, so
+deep stacks can suffer vanishing gradients. This motivates ReLU-style activations in larger
+networks.
+
+\paragraph{Q5. How does this relate to PyTorch?}
+PyTorch's autograd follows the same principle (a dynamically built DAG, local backward
+functions, reverse topological traversal, gradient accumulation into \texttt{.grad}). The
+difference is granularity: PyTorch nodes are tensor operations executed by optimised kernels,
+while MicroGrad's nodes are individual scalars, which makes it transparent but orders of
+magnitude slower.
+
+\section{Conclusion}
+The engine implements reverse-mode autodiff with a handful of primitive operators, a post-order
+DFS topological sort, and accumulating closures. It passes the full autograder suite, matches
+numerical gradients to machine precision, and is sufficient to train a small MLP to $100\%$
+training accuracy on a non-linearly separable dataset.
+
+\end{document}
