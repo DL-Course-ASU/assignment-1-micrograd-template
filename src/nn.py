@@ -1,56 +1,71 @@
 import random
 from src.engine import Value
 
+
 class Neuron:
     def __init__(self, nin):
-        # TODO: Initialize weights (w) as a list of Value objects (random uniform -1 to 1)
-        # TODO: Initialize bias (b) as a Value object (random uniform -1 to 1)
-        pass
+        self.w = [Value(random.uniform(-1, 1)) for _ in range(nin)]
+        self.b = Value(random.uniform(-1, 1))
 
     def __call__(self, x):  # Neuron(nin)(x)
-        # TODO: Calculate w*x + b
-        # TODO: Pass the result through a tanh activation and return it
-        pass
+        if len(x) != len(self.w):
+            raise ValueError("Input count must match the neuron's weight count")
+
+        total = self.b
+        for weight, input_value in zip(self.w, x):
+            total = total + weight * input_value
+        return total.tanh()
 
     def parameters(self):
-        # TODO: Return a list of all parameters (weights + bias)
-        pass
+        return self.w + [self.b]
 
     def zero_grad(self):
-        # TODO: Call reset_grad() on all parameters
-        pass
+        for parameter in self.parameters():
+            parameter.reset_grad()
+
 
 class Layer:
     def __init__(self, nin, nout):
-        # TODO: Initialize a list of `nout` Neurons, each with `nin` inputs
-        pass
+        self.neurons = [Neuron(nin) for _ in range(nout)]
 
     def __call__(self, x):
-        # TODO: Pass input x through all neurons
-        # TODO: Return a single output if nout==1, else return a list of outputs
-        pass
+        outputs = [neuron(x) for neuron in self.neurons]
+        if len(outputs) == 1:
+            return outputs[0]
+        return outputs
 
     def parameters(self):
-        # TODO: Return a flattened list of all parameters in all neurons
-        pass
+        parameters = []
+        for neuron in self.neurons:
+            parameters.extend(neuron.parameters())
+        return parameters
 
     def zero_grad(self):
-        # TODO: Zero the gradients of all parameters in this layer
-        pass
+        for parameter in self.parameters():
+            parameter.reset_grad()
+
 
 class MLP:
     def __init__(self, nin, nouts):
-        # TODO: Initialize a sequence of Layers based on the sizes in `nin` and `nouts` list
-        pass
+        self.layers = []
+        for nout in nouts:
+            self.layers.append(Layer(nin, nout))
+            nin = nout
 
     def __call__(self, x):
-        # TODO: Pass input x sequentially through all layers and return the final output
-        pass
+        for layer in self.layers:
+            # A layer with one neuron returns a single Value.
+            if isinstance(x, Value):
+                x = [x]
+            x = layer(x)
+        return x
 
     def parameters(self):
-        # TODO: Return a flattened list of all parameters in all layers
-        pass
+        parameters = []
+        for layer in self.layers:
+            parameters.extend(layer.parameters())
+        return parameters
 
     def zero_grad(self):
-        # TODO: Zero the gradients of all parameters in the MLP
-        pass
+        for parameter in self.parameters():
+            parameter.reset_grad()
