@@ -62,7 +62,7 @@ class Value:
 
     def __pow__(self, other):  # self ** other
         # TODO: Assert other is int or float
-        assert isinstance(other, (int, float))
+        
         # TODO: Return new Value and implement _backward using power rule
         ans = Value(self.data**other, (self, ), 'pow')
         
