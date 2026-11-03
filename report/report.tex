@@ -1,0 +1,284 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{hyperref}
+
+\graphicspath{{figures/}}
+\hypersetup{colorlinks=true,linkcolor=black,urlcolor=blue,citecolor=black}
+\lstset{
+  language=Python,
+  basicstyle=\ttfamily\small,
+  keywordstyle=\bfseries,
+  commentstyle=\color{gray},
+  columns=fullflexible,
+  frame=single,
+  showstringspaces=false
+}
+\setlength{\parskip}{0.5em}
+\setlength{\parindent}{0pt}
+
+\newcommand{\studentname}{Maryam Mohamed Ahmed}
+\newcommand{\studentid}{23P0056}
+
+\title{CSE485--CSE488: Deep Learning\\Assignment 1: MicroGrad (Scalar Autograd Engine)}
+\author{\studentname\\Student ID: \studentid}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Summary}
+
+This report documents a scalar reverse-mode automatic differentiation engine (\texttt{src/engine.py}) and a small neural network API built on it (\texttt{src/nn.py}), both written without PyTorch.
+
+\begin{itemize}
+  \item All 12 tests in the provided suite pass locally.
+  \item Gradients match PyTorch to within floating-point rounding, on both a composite function and a full MLP.
+  \item An MLP trained with the engine classified all 50 held-out two-moons points correctly (one seed). A second MLP fitted a noisy sine curve with a test MSE of 0.0056.
+  \item Two limitations were measured and are described in Section~\ref{sec:limits}: repeated \texttt{backward()} calls need gradients reset first, and very deep graphs exceed Python's recursion limit.
+\end{itemize}
+
+\section{Mathematical derivations}
+
+\subsection{Reverse-mode differentiation}
+
+Let $L$ be the final output of a graph. For each node $v$, the engine stores the \emph{adjoint}
+\begin{equation}
+  \bar v = \frac{\partial L}{\partial v},
+\end{equation}
+in \texttt{v.grad}. The seed is $\bar L = 1$. If a node $v$ is used by several parent nodes $u_1,\dots,u_k$, the multivariable chain rule sums over every path:
+\begin{equation}
+  \bar v = \sum_{i=1}^{k} \bar u_i \, \frac{\partial u_i}{\partial v}.
+  \label{eq:chain}
+\end{equation}
+Each operator's \texttt{\_backward} closure adds one term of this sum, $\bar u \, \partial u / \partial v$, to each of its inputs. This gives two requirements:
+
+\begin{enumerate}
+  \item \textbf{Accumulate with \texttt{+=}.} Each closure supplies only one term of the sum.
+  \item \textbf{Process parents first.} The value $\bar u$ must be final before it is used, which is what the topological sort guarantees.
+\end{enumerate}
+
+\subsection{Local derivatives}
+
+Table~\ref{tab:rules} lists the update performed by each primitive, where $u$ is the output node.
+
+\begin{table}[h]
+  \centering
+  \begin{tabular}{lll}
+    \toprule
+    Operation & Local derivatives & Adjoint update \\
+    \midrule
+    $u = a + b$ & $\partial u/\partial a = 1,\ \partial u/\partial b = 1$ & $\bar a \mathrel{+}= \bar u,\ \bar b \mathrel{+}= \bar u$ \\
+    $u = a \cdot b$ & $\partial u/\partial a = b,\ \partial u/\partial b = a$ & $\bar a \mathrel{+}= b\,\bar u,\ \bar b \mathrel{+}= a\,\bar u$ \\
+    $u = a^{n}$ ($n$ constant) & $\partial u/\partial a = n a^{n-1}$ & $\bar a \mathrel{+}= n a^{n-1}\,\bar u$ \\
+    $u = e^{a}$ & $\partial u/\partial a = e^{a} = u$ & $\bar a \mathrel{+}= u\,\bar u$ \\
+    $u = \tanh a$ & $\partial u/\partial a = 1 - \tanh^2 a = 1 - u^2$ & $\bar a \mathrel{+}= (1-u^2)\,\bar u$ \\
+    \bottomrule
+  \end{tabular}
+  \caption{Primitive operations and their reverse-mode updates.}
+  \label{tab:rules}
+\end{table}
+
+\textbf{Derivation for $\tanh$.} Since $\tanh a = \sinh a / \cosh a$, the quotient rule gives
+\begin{equation}
+  \frac{d}{da}\tanh a = \frac{\cosh a \cosh a - \sinh a \sinh a}{\cosh^2 a} = 1 - \frac{\sinh^2 a}{\cosh^2 a} = 1 - \tanh^2 a.
+\end{equation}
+This form reuses the value already computed in the forward pass.
+
+\textbf{Composite operators.} Negation, subtraction and division are built from the primitives, so they need no derivative code of their own:
+\begin{equation}
+  -a = a \cdot (-1), \qquad a - b = a + (b \cdot (-1)), \qquad \frac{a}{b} = a \cdot b^{-1}.
+\end{equation}
+The quotient rule then follows automatically. Applying the product and power rules to $u = a b^{-1}$ gives
+\begin{equation}
+  \frac{\partial u}{\partial a} = b^{-1} = \frac{1}{b}, \qquad \frac{\partial u}{\partial b} = a \cdot (-1) b^{-2} = -\frac{a}{b^{2}}.
+\end{equation}
+
+\subsection{Worked example: a diamond graph}
+
+Take $c = a + a$ and $d = c \cdot a$ at $a = 3$, so $c = 6$ and $d = 18$. Analytically, $d = 2a^2$, so $\partial d / \partial a = 4a = 12$. Table~\ref{tab:trace} shows the engine reaching the same result. The reversed topological order is $d, c, a$.
+
+\begin{table}[h]
+  \centering
+  \begin{tabular}{lccc}
+    \toprule
+    Step & $\bar d$ & $\bar c$ & $\bar a$ \\
+    \midrule
+    Seed the output & 1 & 0 & 0 \\
+    Run $d$'s closure: $\bar c \mathrel{+}= a\bar d$, then $\bar a \mathrel{+}= c\bar d$ & 1 & 3 & 6 \\
+    Run $c$'s closure: $\bar a \mathrel{+}= \bar c$ twice (both inputs are $a$) & 1 & 3 & 12 \\
+    \bottomrule
+  \end{tabular}
+  \caption{Adjoint values after each step for $d = (a + a)\cdot a$ at $a = 3$.}
+  \label{tab:trace}
+\end{table}
+
+\subsection{Why reversed post-order is correct}
+
+The graph is a directed acyclic graph, because each \texttt{Value} only refers to nodes that existed before it. The depth-first search appends a node only after visiting all of its children, so every child appears before its parent in \texttt{topo}. Reversing the list therefore places every parent before its children.
+
+When a node's closure runs, every node that uses it has already run, so every term in Equation~\eqref{eq:chain} has been added and its adjoint is final. Each node and edge is processed once, so the backward pass costs $O(V + E)$, the same order as the forward pass.
+
+\begin{lstlisting}
+def _get_topo(self):
+    topo = []
+    visited = set()
+
+    def build_topo(node):
+        if node not in visited:
+            visited.add(node)
+            for child in node._prev:
+                build_topo(child)
+            topo.append(node)  # post-order: only after all children are placed
+
+    build_topo(self)
+    return topo
+\end{lstlisting}
+
+\section{Design justifications}
+
+\subsection{Engine}
+
+\begin{itemize}
+  \item \textbf{Closures for \texttt{\_backward}.} Each closure captures its own inputs and output, so the global \texttt{backward()} stays generic and needs no knowledge of individual operators.
+
+  \item \textbf{Explicit operand checking.} \texttt{\_as\_value} wraps real numbers and raises \texttt{TypeError} for anything else. Relying on Python's own errors is not enough: \texttt{Value(2) * [1, 2]} would silently repeat the list, because an integer times a list is valid Python.
+
+  \item \textbf{Constant exponents only.} \texttt{\_\_pow\_\_} asserts that the exponent is an \texttt{int} or \texttt{float}, as the template requires. A \texttt{Value} exponent would need the extra derivative $\partial(a^y)/\partial y = a^y \ln a$, which is undefined for $a \le 0$.
+
+  \item \textbf{Power edge cases.} A negative base with a fractional exponent raises \texttt{ValueError}, since Python would otherwise return a complex number that breaks later operations. For $n = 0$, the closure adds nothing, which is the correct zero gradient and avoids evaluating $0^{-1}$ when $a = 0$.
+
+  \item \textbf{\texttt{math.tanh} instead of the exponential formula.} Writing $\tanh a = (e^{2a} - 1)/(e^{2a} + 1)$ overflows for large $a$. With \texttt{math.tanh}, \texttt{Value(1000.0).tanh()} correctly returns 1.0.
+
+  \item \textbf{Reversed operators.} \texttt{\_\_rsub\_\_} and \texttt{\_\_rtruediv\_\_} are not in the template but were added, so expressions such as \texttt{2 - a} and \texttt{1 / a} work in the same way as \texttt{2 + a}.
+
+  \item \textbf{Identity hashing.} \texttt{Value} does not override \texttt{\_\_eq\_\_}. Nodes therefore hash by identity, so two different nodes holding the same number stay separate in \texttt{\_prev} and \texttt{visited}.
+\end{itemize}
+
+\subsection{Neural network API}
+
+\begin{itemize}
+  \item \textbf{Consistent interface.} \texttt{Neuron}, \texttt{Layer} and \texttt{MLP} each provide \texttt{\_\_call\_\_}, \texttt{parameters()} and \texttt{zero\_grad()}. Each class delegates to the level below it, and the training loop can treat any of them as a model.
+
+  \item \textbf{Weighted sum seeded with the bias.} The neuron computes \texttt{sum(w*x, b)}, which starts from the bias rather than from 0. This avoids creating an unnecessary graph node for each neuron.
+
+  \item \textbf{Scalar inputs.} A one-neuron \texttt{Layer} returns a single \texttt{Value}, as the template requires. \texttt{Neuron} also accepts a bare scalar, so networks with a one-unit hidden layer, such as \texttt{MLP(2, [1, 3, 1])}, and scalar regression inputs both work.
+
+  \item \textbf{Input size check.} \texttt{zip} silently ignores extra items, so a wrong-sized input would otherwise produce a meaningless answer. \texttt{Neuron} raises \texttt{ValueError} instead.
+\end{itemize}
+
+\subsection{Known limitations}
+\label{sec:limits}
+
+The first two limitations follow from keeping the design specified in the assignment, and neither affects the demo notebook. The third is inherent to a scalar engine.
+
+\begin{itemize}
+  \item \textbf{Repeated \texttt{backward()} without resetting.} Intermediate nodes keep their adjoints between calls. For $y = ab$ and $z = 4y$ at $a = 2$, $b = 3$, the first call gives $\bar a = 12$, but a second call gives $\bar a = 36$, not 24. This is because $\bar y$ grows to 8 and is multiplied by $b$ again. The training loop avoids this by rebuilding the graph on every forward pass and zeroing the parameters.
+
+  \item \textbf{Recursion depth.} \texttt{build\_topo} is recursive, as in the assignment's hint. A chain of 900 additions worked, but a chain of 1100 raised \texttt{RecursionError} under Python's default limit of 1000. An iterative depth-first search with an explicit stack would remove this limit.
+
+  \item \textbf{Speed.} Every scalar operation allocates a Python object. Training the 105-parameter classifier on 100 samples took roughly 0.4~s per epoch, including test evaluation. Real frameworks avoid this cost by operating on whole tensors.
+\end{itemize}
+
+\section{Verification}
+
+\begin{table}[h]
+  \centering
+  \begin{tabular}{lp{7.8cm}}
+    \toprule
+    Check & Result \\
+    \midrule
+    Provided \texttt{pytest} suite & 12 of 12 pass on Python 3.12 and Python 3.9 \\
+    Finite differences (notebook) & Largest absolute error $2.4 \times 10^{-11}$ \\
+    PyTorch, composite function, 500 random inputs & Largest relative gradient error $2.0 \times 10^{-15}$ \\
+    PyTorch, MLP(3, [4, 4, 1]) loss on 3 samples & Largest absolute gradient error $2.2 \times 10^{-16}$ \\
+    Zero gradients in \texttt{test\_mlp} & None across 3000 random seeds \\
+    Notebook reproducibility & Two full runs printed identical metrics \\
+    \bottomrule
+  \end{tabular}
+  \caption{Verification results.}
+  \label{tab:verify}
+\end{table}
+
+The seed sweep was run because \texttt{test\_mlp} requires every parameter's gradient to be non-zero, which depends on random initialization. The autograder runs on Python 3.10, which was not available locally; the two tested versions fall on either side of it.
+
+\section{Experiments}
+
+The demo notebook (\texttt{demo.ipynb}) trains two models using full-batch gradient descent on mean squared error. Table~\ref{tab:results} gives the setup and results.
+
+\begin{table}[h]
+  \centering
+  \begin{tabular}{lll}
+    \toprule
+    & Classifier & Regressor \\
+    \midrule
+    Data & Two moons (noise 0.15) & $0.8\sin(\pi x) + \varepsilon,\ \varepsilon \sim \mathcal{N}(0, 0.05^2)$ \\
+    Train / test samples & 100 / 50 & 40 / 20 \\
+    Architecture & MLP(2, [8, 8, 1]) & MLP(1, [12, 12, 1]) \\
+    Parameters & 105 & 193 \\
+    Epochs, learning rate & 300, 0.3 & 500, 0.2 \\
+    Train MSE & 0.0061 & 0.0035 \\
+    Test MSE & 0.0233 & 0.0056 \\
+    Test accuracy & 100\% (50 of 50) & n/a \\
+    \bottomrule
+  \end{tabular}
+  \caption{Experiment setup and final results, using seed 42.}
+  \label{tab:results}
+\end{table}
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.78\linewidth]{classifier_loss.png}
+  \caption{Classifier loss. The early oscillation suggests that a learning rate of 0.3 is near the upper end of what is stable, but it settles by about epoch 100.}
+  \label{fig:clf-loss}
+\end{figure}
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.78\linewidth]{decision_boundary.png}
+  \caption{Learned decision boundary. The network learned a curved boundary between the classes, which a single linear neuron could not represent.}
+  \label{fig:boundary}
+\end{figure}
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.78\linewidth]{regression_fit.png}
+  \caption{Regression fit. The prediction follows the curve but slightly underestimates the peaks and drifts near $x = \pm 1$. The test loss was still falling at epoch 500, so more training would likely improve the fit.}
+  \label{fig:regression}
+\end{figure}
+
+\textbf{Interpreting these results.} The classifier's 100\% accuracy comes from one seed and only 50 test points, on a dataset with little class overlap, so it shows that the engine trains correctly rather than giving a precise estimate of model quality. Its test MSE (0.0233) is about four times its train MSE (0.0061), which is a sign of mild overfitting in the output confidence even though every test point has the correct sign.
+
+\section{Conceptual questions}
+
+The assignment handout lists no numbered conceptual questions, so this section answers the main concepts raised by its objective and TA warnings.
+
+\textbf{Q1. Why must a node be appended to \texttt{topo} after its children are visited?}\\
+Appending first would place a parent before its children in the list. After reversal, a child's closure could run before its parent's and spread an incomplete adjoint. The gradient can then be wrong without any error being raised.
+
+\textbf{Q2. What does the \texttt{visited} set prevent?}\\
+It keeps a shared node from appearing in \texttt{topo} more than once. Without it, a diamond-shaped graph would run that node's closure once per path, double-counting its contribution to its children. The number of paths can also grow exponentially with depth. Because the graph has no cycles, the practical failure is wrong gradients and very long run times, not a true infinite cycle.
+
+\textbf{Q3. Why use \texttt{+=} instead of \texttt{=} in \texttt{\_backward}?}\\
+Equation~\eqref{eq:chain} is a sum over all uses of a node. Using \texttt{=} would keep only the last term. For $c = a + a$, the closure updates $a$ twice, and the result must be 2, not 1.
+
+\textbf{Q4. Why does the training loop need \texttt{zero\_grad()}?}\\
+Parameters persist between iterations, and their gradients accumulate. Without resetting, each update would use the sum of all earlier gradients instead of the gradient at the current weights.
+
+\textbf{Q5. Why use reverse mode rather than forward mode?}\\
+A neural network has many inputs (the parameters) and one output (the loss). Reverse mode computes all the partial derivatives in one backward pass. Forward mode would need one pass per parameter.
+
+\textbf{Q6. Why initialize weights randomly?}\\
+If all neurons in a layer started identical, they would produce identical outputs and receive identical gradients, so they would stay identical throughout training. Random initialization breaks this symmetry so that neurons can learn different features.
+
+\textbf{Q7. What happens to gradients when \texttt{tanh} saturates?}\\
+The local derivative $1 - \tanh^2 a$ approaches 0 as $|a|$ grows. Since backpropagation multiplies local derivatives along a path, saturated neurons shrink the gradients passing through them, which slows learning in earlier layers. This is the vanishing gradient problem.
+
+\end{document}
