@@ -1,0 +1,78 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,listings,xcolor}
+\lstset{basicstyle=\ttfamily\small,frame=single,language=Python}
+
+\title{CSE485/CSE488 Deep Learning\\Assignment 1: MicroGrad (Scalar Autograd Engine)}
+\author{Saifeldin Tamer Mohamed ElSayes \quad 22P0233}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\section{Overview}
+We implement a scalar reverse-mode automatic differentiation engine (\texttt{src/engine.py})
+and a small neural-network API (\texttt{src/nn.py}) on top of it. Every arithmetic operation
+creates a new \texttt{Value} node that records its inputs (\texttt{\_prev}) and a closure
+\texttt{\_backward} that applies the local derivative via the chain rule.
+All 12 autograder tests pass.
+
+\section{Mathematical Derivations}
+Let $L$ be the final output and $\bar{x} = \partial L / \partial x$ denote the gradient
+stored in \texttt{x.grad}. For an output node $z$ with upstream gradient $\bar{z}$,
+each operation contributes the following to its inputs:
+
+\begin{center}
+\begin{tabular}{lll}
+\hline
+Operation & Forward & Backward (accumulated with \texttt{+=}) \\
+\hline
+Addition & $z = a + b$ & $\bar a \mathrel{+}= \bar z,\ \bar b \mathrel{+}= \bar z$ \\
+Multiplication & $z = ab$ & $\bar a \mathrel{+}= b\,\bar z,\ \bar b \mathrel{+}= a\,\bar z$ \\
+Power ($n$ constant) & $z = a^n$ & $\bar a \mathrel{+}= n a^{n-1}\,\bar z$ \\
+Tanh & $z = \tanh a$ & $\bar a \mathrel{+}= (1 - z^2)\,\bar z$ \\
+Exp & $z = e^a$ & $\bar a \mathrel{+}= z\,\bar z$ \\
+\hline
+\end{tabular}
+\end{center}
+
+\paragraph{Tanh.} $\tanh a = \frac{e^{a}-e^{-a}}{e^{a}+e^{-a}}$; by the quotient rule
+$\frac{d}{da}\tanh a = \frac{(e^a+e^{-a})^2-(e^a-e^{-a})^2}{(e^a+e^{-a})^2} = 1-\tanh^2 a$,
+so the backward pass reuses the forward output $z$.
+
+\paragraph{Derived operations.} Negation, subtraction and division are composed from the
+primitives: $-a = a\cdot(-1)$, $a-b = a+(-b)$, $a/b = a\cdot b^{-1}$. Their gradients follow
+automatically, e.g.\ $\partial(a/b)/\partial b = -a b^{-2}$. Division by zero raises
+\texttt{ZeroDivisionError} from $0^{-1}$ in the forward pass.
+
+\paragraph{Neuron.} $y = \tanh\!\left(\sum_i w_i x_i + b\right)$, so
+$\partial y/\partial w_i = (1-y^2)\,x_i$ and $\partial y/\partial b = 1-y^2$.
+
+\section{Design Justifications}
+\begin{itemize}
+  \item \textbf{Gradient accumulation (\texttt{+=}).} A node used in several places
+  (e.g.\ $c = a + a$) receives gradient from every path (multivariate chain rule).
+  Assigning with \texttt{=} would overwrite earlier contributions.
+  \item \textbf{Topological sort (post-order DFS).} A node is appended only after all of
+  its children, so iterating the list in reverse guarantees that a node's gradient is
+  complete before it is propagated further. The \texttt{visited} set prevents revisiting
+  shared nodes (diamond graphs), which would otherwise cause double counting.
+  \item \textbf{Type safety.} Operands are wrapped only if they are \texttt{Value},
+  \texttt{int} or \texttt{float}; anything else raises \texttt{TypeError}.
+  \texttt{\_\_pow\_\_} asserts a constant exponent, since $\partial(a^b)/\partial b$ is not supported.
+  \item \textbf{Closures for \texttt{\_backward}.} Each closure captures exactly the
+  values it needs (inputs and output), keeping the engine compact.
+  \item \textbf{NN API.} \texttt{Neuron}, \texttt{Layer}, \texttt{MLP} mirror PyTorch:
+  weights are drawn from $U(-1,1)$, \texttt{parameters()} returns a flat list and
+  \texttt{zero\_grad()} resets gradients before each backward pass. A layer with one
+  neuron returns a scalar \texttt{Value} for convenience.
+\end{itemize}
+
+\section{Experiment}
+The demo notebook (\texttt{demo.ipynb}) verifies one gradient against finite differences
+(autograd $0.138672$ vs.\ numerical $0.138672$), then trains an MLP $2\to16\to16\to1$
+(337 parameters) on a 60-point two-moons dataset using MSE loss and SGD with a decaying
+learning rate. After 60 steps the loss falls from $1.10$ to $0.14$ and training accuracy
+reaches $96.7\%$.
+
+\end{document}
