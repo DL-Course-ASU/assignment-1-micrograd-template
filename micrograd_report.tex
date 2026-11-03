@@ -1,0 +1,191 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{hyperref}
+
+\definecolor{codegray}{gray}{0.95}
+\lstset{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{codegray},
+  frame=single,
+  breaklines=true,
+  columns=fullflexible
+}
+
+\title{Assignment 1: MicroGrad\\Scalar Automatic Differentiation Engine}
+\author{John George Mikhael \and 23P0266}
+\date{\today 3/11/2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This report describes a scalar automatic differentiation engine and a small
+multilayer perceptron implemented without PyTorch or another machine-learning
+framework. The implementation represents each scalar as a node in a directed
+computational graph, records local derivative rules for elementary operations,
+and computes gradients by reverse-mode automatic differentiation.
+\end{abstract}
+
+\section{Objective}
+The objective of this assignment is to understand the mechanics behind
+backpropagation. The implementation in \texttt{src/engine.py} provides a
+\texttt{Value} class for scalar data and gradients. The implementation in
+\texttt{src/nn.py} builds a simple neural-network API consisting of
+\texttt{Neuron}, \texttt{Layer}, and \texttt{MLP}.
+
+\section{Computational Graph}
+Each \texttt{Value} stores:
+\begin{itemize}
+  \item \texttt{data}: the scalar value of the node;
+  \item \texttt{grad}: the derivative of the final output with respect to the
+        node;
+  \item \texttt{\_prev}: the set of parent nodes used to compute it;
+  \item \texttt{\_backward}: a closure containing the local chain-rule update.
+\end{itemize}
+
+For example, if $z=x+y$, then
+\[
+\frac{\partial z}{\partial x}=1,\qquad
+\frac{\partial z}{\partial y}=1.
+\]
+When the output gradient is $\partial L/\partial z$, the local backward
+function accumulates
+\[
+\frac{\partial L}{\partial x}
+\mathrel{+}=\frac{\partial L}{\partial z},\qquad
+\frac{\partial L}{\partial y}
+\mathrel{+}=\frac{\partial L}{\partial z}.
+\]
+The use of $\mathrel{+}=$ is essential when a value is reused in multiple
+branches of the graph.
+
+\section{Local Derivative Rules}
+The engine implements the following rules:
+\begin{align*}
+z &= x+y &
+\frac{\partial z}{\partial x} &= 1,\quad
+\frac{\partial z}{\partial y}=1,\\
+z &= xy &
+\frac{\partial z}{\partial x} &= y,\quad
+\frac{\partial z}{\partial y}=x,\\
+z &= x^p &
+\frac{\partial z}{\partial x} &= p x^{p-1},\\
+z &= \tanh(x) &
+\frac{\partial z}{\partial x} &= 1-\tanh^2(x),\\
+z &= e^x &
+\frac{\partial z}{\partial x} &= e^x.
+\end{align*}
+Subtraction, negation, and division are reduced to these primitives:
+\[
+x-y=x+(-y),\qquad
+-x=(-1)x,\qquad
+\frac{x}{y}=x y^{-1}.
+\]
+
+\section{Topological Sort and Backpropagation}
+The graph is traversed by depth-first search. A visited set ensures that a
+shared node is visited once, while post-order insertion ensures that every
+parent appears before its dependent node in the resulting topological list.
+For a scalar output $L$, the global backward algorithm is:
+\begin{enumerate}
+  \item Build the topological ordering starting at $L$.
+  \item Set $L.\texttt{grad}=1$ because $\partial L/\partial L=1$.
+  \item Traverse the ordering in reverse and invoke each node's local
+        \texttt{\_backward} closure.
+\end{enumerate}
+This order guarantees that a node receives all gradient contributions from
+its children before its own gradient is propagated to its parents.
+
+\subsection{Diamond graph}
+Consider $c=a+a$ and $d=ca$. Since $d=2a^2$,
+\[
+\frac{\partial d}{\partial a}=4a.
+\]
+At $a=3$, the correct result is $12$. The implementation obtains this result
+because both paths from $a$ are accumulated rather than overwritten.
+
+\section{Neural-Network API}
+A \texttt{Neuron} contains a list of randomly initialized weights and one
+randomly initialized bias. Given an input vector $\boldsymbol{x}$, it computes
+\[
+y=\tanh\left(\sum_i w_i x_i+b\right).
+\]
+A \texttt{Layer} contains multiple neurons and returns either a single
+\texttt{Value} for one output neuron or a list of values for multiple output
+neurons. An \texttt{MLP} creates consecutive layers using the requested size
+configuration, such as \texttt{MLP(2,[4,4,1])}.
+
+The \texttt{parameters()} methods flatten all weights and biases so that a
+training loop can update them uniformly. The \texttt{zero\_grad()} methods
+clear stored gradients before a new optimization step.
+
+\section{Training Demonstration}
+The accompanying notebook, \texttt{demo\_micrograd.ipynb}, trains
+\texttt{MLP(2,[4,4,1])} on the four XOR examples:
+\[
+(0,0)\mapsto -1,\quad
+(0,1)\mapsto +1,\quad
+(1,0)\mapsto +1,\quad
+(1,1)\mapsto -1.
+\]
+The output neuron uses $\tanh$, so the targets lie in $[-1,1]$. The mean
+squared error is
+\[
+\mathcal{L}=\frac{1}{N}\sum_{j=1}^{N}(\hat{y}_j-y_j)^2.
+\]
+Each training step resets gradients, evaluates the loss, calls
+\texttt{backward()}, and applies manual gradient descent:
+\[
+\theta \leftarrow \theta-\eta\nabla_\theta\mathcal{L}.
+\]
+The notebook uses a fixed random seed for reproducibility and plots both the
+loss curve and the learned XOR predictions.
+
+\section{Testing and Results}
+The provided automated test suite contains 12 tests. It checks initialization,
+arithmetic operations, invalid operand handling, powers, activations,
+gradient accumulation, chain-rule behavior, division by zero, type casting,
+and the complete neural-network API. All 12 tests pass after implementation.
+
+\begin{table}[h]
+\centering
+\caption{Implemented components and validation}
+\begin{tabular}{ll}
+\toprule
+Component & Result\\
+\midrule
+Scalar arithmetic and reverse operators & Implemented\\
+Power, \texttt{tanh}, and \texttt{exp} & Implemented\\
+Topological reverse-mode differentiation & Implemented\\
+Neuron, Layer, and MLP & Implemented\\
+Automated tests & 12 passed\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Design Justifications}
+\begin{itemize}
+  \item Scalars are represented as graph nodes so each operation can retain
+        both its forward result and local derivative rule.
+  \item Parent nodes are stored in a set because graph membership is what is
+        needed for traversal; gradient contributions are accumulated inside
+        the backward closures.
+  \item Reverse-mode differentiation is appropriate because the network has
+        one scalar loss and many parameters.
+  \item The neural-network API intentionally stays small: parameter
+        collection and gradient reset are sufficient for a transparent
+        hand-written optimization loop.
+\end{itemize}
+
+\section{Conclusion}
+This assignment demonstrates that backpropagation can be implemented with
+basic Python objects, local derivative formulas, and a topological traversal.
+The same chain rule used by this small engine is the foundation of gradient
+computation in larger deep-learning frameworks.
+
+\end{document}
