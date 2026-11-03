@@ -13,10 +13,10 @@
 \newcommand{\studentName}{Mohamed Wael Badra}
 \newcommand{\studentId}{23P0059}
 \newcommand{\paramCount}{337}
-\newcommand{\initialLoss}{--}
-\newcommand{\finalLoss}{--}
-\newcommand{\initialAccuracy}{--}
-\newcommand{\finalAccuracy}{--}
+\newcommand{\initialLoss}{1.0976}
+\newcommand{\finalLoss}{0.0183}
+\newcommand{\initialAccuracy}{69.0\%}
+\newcommand{\finalAccuracy}{100.0\%}
 
 \lstset{
   basicstyle=\ttfamily\small,
@@ -224,6 +224,8 @@ Accuracy & \initialAccuracy & \finalAccuracy \\
 \bottomrule
 \end{tabular}
 \end{center}
+
+The loss falls by about a factor of 60 and every training point ends up on the correct side of the boundary. The random network already scores 69\% because a roughly linear split separates most of the two moons; the remaining points sit where the moons interlock, and the curved boundary the network learns covers them as well. These numbers are training accuracy only. The goal here is to show that the engine's gradients drive the optimisation correctly, not to measure generalisation, so no test split is held out.
 
 \begin{figure}[h]
   \centering
