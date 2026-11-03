@@ -1,79 +1,124 @@
+"""Scalar reverse-mode autodiff; depends only on Python's standard library."""
 import math
+
 
 class Value:
     def __init__(self, data, _children=(), _op='', label=''):
+        if not isinstance(data, (int, float)):
+            raise TypeError('Value data must be an int or float')
         self.data = data
-        self.grad = 0.0  # means no effect by default
+        self.grad = 0.0
         self._backward = lambda: None
         self._prev = set(_children)
         self._op = _op
         self.label = label
 
     def __repr__(self):
-        # TODO: Return string representation, e.g., "Value(data=...)"
-        pass
+        return f'Value(data={self.data})'
 
-    def __add__(self, other):  # self + other
-        # TODO: Handle both Value and scalar inputs
-        # TODO: Return new Value and implement _backward
-        pass
+    def __add__(self, other):
+        other = other if isinstance(other, Value) else Value(other)
+        out = Value(self.data + other.data, (self, other), '+')
+        def _backward():
+            self.grad += out.grad
+            other.grad += out.grad
+        out._backward = _backward
+        return out
 
-    def __radd__(self, other):  # other + self
-        # TODO: Implement reverse addition
-        pass
+    def __radd__(self, other):
+        return self + other
 
-    def __mul__(self, other):  # self * other
-        # TODO: Handle both Value and scalar inputs
-        # TODO: Return new Value and implement _backward using product rule
-        pass
+    def __mul__(self, other):
+        other = other if isinstance(other, Value) else Value(other)
+        out = Value(self.data * other.data, (self, other), '*')
+        def _backward():
+            self.grad += other.data * out.grad
+            other.grad += self.data * out.grad
+        out._backward = _backward
+        return out
 
-    def __rmul__(self, other):  # other * self
-        # TODO: Implement reverse multiplication
-        pass
+    def __rmul__(self, other):
+        return self * other
 
-    def __neg__(self):  # -self
-        # TODO: Implement negation
-        pass
+    def __neg__(self):
+        return self * -1
 
-    def __sub__(self, other):  # self - other
-        # TODO: Implement subtraction
-        pass
+    def __sub__(self, other):
+        return self + (-other)
 
-    def __truediv__(self, other):  # self / other
-        # TODO: Implement division using self * other**-1
-        pass
+    def __rsub__(self, other):
+        return (-self) + other
 
-    def __pow__(self, other):  # self ** other
-        # TODO: Assert other is int or float
-        # TODO: Return new Value and implement _backward using power rule
-        pass
+    def __truediv__(self, other):
+        other = other if isinstance(other, Value) else Value(other)
+        return self * other**-1
 
-    def tanh(self):  # tanh(self)
-        # TODO: Implement hyperbolic tangent activation
-        # TODO: Implement _backward for tanh
-        pass
+    def __rtruediv__(self, other):
+        return other * self**-1
 
-    def exp(self):  # e**self
-        # TODO: Implement exponential function (math.exp)
-        # TODO: Implement _backward for exp
-        pass
+    def __pow__(self, other):
+        assert isinstance(other, (int, float)), 'Exponent must be int or float'
+        result = self.data**other
+        if isinstance(result, complex):
+            raise ValueError('Power result must be real')
+        out = Value(result, (self,), f'**{other}')
+        def _backward():
+            # x**0 is constant, including Python's convention 0**0 == 1.
+            self.grad += (0.0 if other == 0 else other * self.data**(other-1)) * out.grad
+        out._backward = _backward
+        return out
+
+    def tanh(self):
+        # Stable even when exp(2*x) would overflow.
+        out = Value(math.tanh(self.data), (self,), 'tanh')
+        def _backward():
+            self.grad += (1 - out.data**2) * out.grad
+        out._backward = _backward
+        return out
+
+    def exp(self):
+        out = Value(math.exp(self.data), (self,), 'exp')
+        def _backward():
+            self.grad += out.data * out.grad
+        out._backward = _backward
+        return out
+
+    def relu(self):
+        """Optional activation, with subgradient zero at the origin."""
+        out = Value(max(0, self.data), (self,), 'relu')
+        def _backward():
+            self.grad += (out.data > 0) * out.grad
+        out._backward = _backward
+        return out
 
     def reset_grad(self):
-        # TODO: Reset self.grad to 0.0
-        pass
+        self.grad = 0.0
 
     def _get_topo(self):
-        # TODO: Return a list of all nodes in topological order
-        pass
+        topo, visited = [], set()
+        def build_topo(node):
+            if node not in visited:
+                visited.add(node)
+                for child in node._prev:
+                    build_topo(child)
+                topo.append(node)  # Post-order: after ALL dependencies.
+        build_topo(self)
+        return topo
 
     def backward(self):
-        # TODO: Retrieve topological order, set root grad to 1.0, and apply _backward in reverse
-        pass
+        """Accumulate gradients; use a fresh graph for each training step.
 
-    def __int__(self):  # int(self)
-        # TODO: Return data as int
-        pass
+        For a second pass on this same graph, reset ALL graph nodes first.
+        Do not mutate data between constructing a graph and differentiating it.
+        """
+        topo = self._get_topo()
+        self.grad = 1.0
+        for node in reversed(topo):
+            node._backward()
 
-    def __float__(self):  # float(self)
-        # TODO: Return data as float
-        pass
+    def __int__(self):
+        return int(self.data)
+
+    def __float__(self):
+        return float(self.data)
+

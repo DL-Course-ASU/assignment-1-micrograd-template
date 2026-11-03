@@ -1,0 +1,467 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=22mm,headheight=14pt]{geometry}
+\usepackage{amsmath,amssymb,graphicx,booktabs,array,xcolor,listings,fancyhdr}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{xurl}
+\usepackage{hyperref}
+\hypersetup{colorlinks=true,urlcolor=teal,linkcolor=teal,pdftitle={Assignment 1: MicroGrad},pdfauthor={Yousef Mohamed Mahmoud Helmy Ismail}}
+\definecolor{ink}{HTML}{17354A}
+\definecolor{pale}{HTML}{F1F6F8}
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{\small CSE485-CSE488: Deep Learning}
+\rhead{\small Assignment 1: MicroGrad}
+\cfoot{\small\thepage}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{6pt}
+\lstset{basicstyle=\ttfamily\small,backgroundcolor=\color{pale},frame=single,
+  rulecolor=\color{white},breaklines=true,columns=fullflexible,keepspaces=true,
+  showstringspaces=false,xleftmargin=6pt,xrightmargin=6pt}
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\fig}[3]{\begin{center}\includegraphics[width=#2\linewidth]{figures/#1}\\[3pt]{\small #3}\end{center}}
+\input{results.tex}
+\begin{document}
+\hypersetup{pageanchor=false}
+\begin{titlepage}
+\centering
+{\Large\bfseries AIN SHAMS UNIVERSITY\par}
+{\large FACULTY OF ENGINEERING\par}
+{\normalsize i-Credit Hours Engineering Programs\par}
+\vspace{16mm}
+{\Large CSE485-CSE488: Deep Learning\par}
+\vspace{12mm}
+{\Huge\bfseries\color{ink} Assignment 1\par}
+\vspace{5mm}
+{\LARGE MicroGrad\par}
+{\Large Scalar Autograd Engine\par}
+\vspace{15mm}
+\rule{.8\linewidth}{.7pt}\par
+\vspace{6mm}
+{\Large Yousef Mohamed Mahmoud\\Helmy Ismail\par}
+\vspace{4mm}
+{\large Student ID: \textbf{20P7954}\par}
+\vspace{7mm}
+{\small Git branch\par}
+{\small\nolinkurl{Yousef-Mohamed-Mahmoud-Helmy-Ismail_20P7954}\par}
+\vspace{9mm}
+{\large 3 November 2026\par}
+\vfill
+\begin{minipage}{.86\linewidth}
+\textbf{Scope.} A standard-library scalar differentiation engine, a composable
+neural-network API, independent correctness checks, and an executed two-moons
+classification notebook. All gradients used for training are computed by the
+submitted engine.\par
+\textbf{Verified result.} \TestCount{} local tests pass. Held-out accuracy is
+\TestAccuracy\% after \EpochCount{} full-batch updates.
+\end{minipage}
+\end{titlepage}
+\hypersetup{pageanchor=true}
+
+\section{Chain rule and primitive arithmetic}
+\textbf{Specification coverage.} The supplied three-page assignment requires
+\code{Value}, arithmetic and activation derivatives, DFS topological sorting,
+\code{Neuron}/\code{Layer}/\code{MLP}, a demo notebook, and a LaTeX report.
+There are no additional standalone conceptual questions in the PDF or template
+README. The explanations below answer the conceptual issues implicit in those
+requirements, including both TA warnings.
+
+\subsection{Reverse-mode differentiation on a DAG}
+Let $L$ be a scalar output, and let $C(u)$ contain the immediate consumers of
+$u$ in the forward computational graph. These consumers are sometimes called
+the parents of $u$ when tracing backward. The multivariable chain rule is
+\begin{equation}
+ \frac{\partial L}{\partial u} =
+ \sum_{v\in C(u)}\frac{\partial L}{\partial v}
+                         \frac{\partial v}{\partial u}.
+ \label{eq:dag}
+\end{equation}
+Each summand describes one path by which changing $u$ changes $L$.
+Repeated operand occurrences contribute separately even if the graph stores a
+single shared input node. The terminal seed is $\partial L/\partial L=1$.
+Reverse mode is useful here because one backward sweep yields the derivative
+of a scalar loss with respect to every network parameter.
+
+\subsection{Addition}
+For $z=x+y$, holding $y$ fixed gives
+$\lim_{h\to0}[(x+h+y)-(x+y)]/h=1$. By symmetry,
+\[
+ \frac{\partial z}{\partial x}=1,\qquad
+ \frac{\partial z}{\partial y}=1.
+\]
+If $\bar z=\partial L/\partial z$, add $\bar z$ to both operand gradients.
+For $z=x+x$, the same node receives two increments, giving $2\bar z$.
+
+\subsection{Multiplication}
+For $z=xy$, the difference quotient with respect to $x$ is
+$[(x+h)y-xy]/h=y$; interchanging $x$ and $y$ yields
+\[
+ \frac{\partial z}{\partial x}=y,\qquad
+ \frac{\partial z}{\partial y}=x.
+\]
+The closure therefore adds $y\bar z$ to $x$ and $x\bar z$ to $y$.
+For $z=x^2$ implemented as $x*x$, both increments reach $x$ and sum to
+$2x\bar z$.
+
+\subsection{Constant powers and derived operations}
+For a fixed real $k$, $z=x^k$ has local derivative $kx^{k-1}$ on its
+differentiable real domain. For positive integer $k$, this follows by expanding
+$(x+h)^k$ and retaining the coefficient of $h$. Negative and fractional powers
+follow the usual extension on valid real domains.
+
+Negation is multiplication by $-1$; subtraction is addition of a negation.
+Division is $x/y=x\,y^{-1}$, so
+$\partial(x/y)/\partial x=1/y$ and
+$\partial(x/y)/\partial y=-x/y^2$. Reverse operators allow expressions such
+as $2-x$ and $2/x$ to construct the same differentiable primitives.
+\clearpage
+
+\section{Activations and numerical conventions}
+\subsection{Exponential}
+For $z=e^x$, using $\lim_{h\to0}(e^h-1)/h=1$ gives
+\[
+ \frac{dz}{dx}=\lim_{h\to0}e^x\frac{e^h-1}{h}=e^x=z.
+\]
+The backward closure reuses the forward result: $\bar x\mathrel{+}=z\bar z$.
+The implementation calls \code{math.exp}; sufficiently large positive inputs
+raise Python's \code{OverflowError} instead of silently fabricating a value.
+
+\subsection{Hyperbolic tangent}
+Writing $q=e^{2x}$ gives $z=(q-1)/(q+1)$ and $dq/dx=2q$. The quotient rule
+yields
+\begin{align*}
+ \frac{dz}{dx}
+ &=\frac{2q(q+1)-(q-1)2q}{(q+1)^2}
+   =\frac{4q}{(q+1)^2},\\
+ 1-z^2
+ &=\frac{(q+1)^2-(q-1)^2}{(q+1)^2}
+   =\frac{4q}{(q+1)^2}.
+\end{align*}
+Thus $dz/dx=1-z^2$ and $\bar x\mathrel{+}=(1-z^2)\bar z$.
+The code uses \code{math.tanh(x)} for the forward pass, avoiding the
+overflow-prone explicit exponential formula. Inputs $\pm1000$ are checked:
+the outputs saturate at $\pm1$ and their floating-point derivatives are zero.
+
+\subsection{Optional ReLU}
+For $z=\max(0,x)$ the derivative is 1 for $x>0$ and 0 for $x<0$.
+At the nondifferentiable point $x=0$, the implementation chooses subgradient
+zero. ReLU is included as a supplemental operation; the template networks
+continue to use tanh at every layer.
+
+\subsection{Explicit domain and state decisions}
+\begin{itemize}
+\item Values wrap Python \code{int} or \code{float} data. Strings, lists, and
+other unsupported data raise \code{TypeError}.
+\item Exponents are fixed \code{int}/\code{float} scalars, matching the
+template assertion contract. Differentiable exponents are outside scope.
+\item Division by zero raises \code{ZeroDivisionError}. Powers producing
+complex results are rejected because this engine represents real scalars.
+\item $x^0$ is treated as a constant with derivative zero, including Python's
+forward convention $0^0=1$. A fractional power at zero may have no finite
+derivative; the implementation does not promise differentiation there.
+\item Data must remain unchanged between graph construction and backward.
+Training updates parameters only after the entire backward sweep.
+\end{itemize}
+The engine performs ordinary Python floating-point arithmetic. It does not
+provide symbolic simplification, automatic precision selection, or special
+handling for every nonfinite input.
+\clearpage
+
+\section{Value architecture and gradient lifecycle}
+\begin{center}
+\begin{tabular}{p{.19\linewidth}p{.72\linewidth}}
+\toprule
+Field & Purpose\\\midrule
+\code{data} & Scalar forward value.\\
+\code{grad} & Accumulated derivative of the chosen scalar output. Initially 0.0.\\
+\code{\_prev} & Set of input-node references; keeps dependencies for traversal.\\
+\code{\_backward} & Closure implementing one operation's local chain rule.\\
+\code{\_op}, \code{label} & Operation and human-readable label for inspection.\\
+\bottomrule
+\end{tabular}
+\end{center}
+Each overloaded operator wraps scalar constants, computes a forward scalar,
+creates a new output node, and installs a closure referring to its operands and
+output. Constants also receive gradients in this simple design; only the list
+returned by \code{parameters()} is updated during optimization.
+
+\subsection{Why a set does not erase repeated-operand derivatives}
+For $c=a+a$, \code{c.\_prev} contains $a$ once. This is sufficient for
+traversal. The addition closure retains both operand roles and executes two
+increments, even though \code{self} and \code{other} reference the same object.
+Graph-node identity and operand multiplicity serve different purposes.
+
+\begin{lstlisting}[language=Python]
+def _backward():
+    self.grad += out.grad
+    other.grad += out.grad
+\end{lstlisting}
+Replacing either increment with assignment loses contributions from other
+paths. Equation~\ref{eq:dag} requires a sum; \code{+=} directly implements it.
+Only the root seed uses assignment: \code{self.grad = 1.0}.
+
+\subsection{Fresh graphs and deliberate reset semantics}
+\code{reset\_grad()} clears one Value. \code{Module.zero\_grad()} clears the
+trainable leaves exposed by that module. Neither automatically resets every
+intermediate in an old graph. The demo constructs a fresh graph for every loss,
+zeros parameter gradients, runs backward, and then changes parameter data.
+
+Calling backward twice on the same graph without clearing intermediates can
+repropagate stale accumulated gradients. To differentiate that same graph
+again, reset every node returned by \code{\_get\_topo()} first. The tests
+verify both a complete graph reset and deliberate accumulation across fresh
+graphs sharing a leaf. This behavior is documented in the API rather than
+silently clearing user gradients inside backward.
+
+\subsection{Costs and limits}
+DFS traversal and reverse execution each take $O(V+E)$ work for a graph with
+$V$ nodes and $E$ dependency edges, plus $O(V)$ traversal storage. Scalar
+networks create many Python objects, so this implementation is educational
+rather than a high-throughput tensor framework. Recursive DFS is limited by
+Python's recursion depth on very deep chains. Set iteration may choose different
+valid sibling orders; all still place each dependency before its consumer.
+\clearpage
+
+\section{Topological sorting and the two traps}
+\begin{lstlisting}[language=Python]
+def _get_topo(self):
+    topo, visited = [], set()
+    def build_topo(node):
+        if node not in visited:
+            visited.add(node)
+            for child in node._prev:
+                build_topo(child)
+            topo.append(node)  # outside the child loop
+    build_topo(self)
+    return topo
+\end{lstlisting}
+\code{backward()} seeds the root with 1.0, then runs the closures in reverse
+topological order.
+\subsection{The Post-Order Trap}
+Forward topological order places an operand before each consumer. Appending
+only after visiting \emph{all} inputs establishes that invariant inductively:
+leaves are appended immediately, and every internal node is appended after
+its already-ordered dependencies. Reversing the list places every consumer
+before its operands, so all upstream contributions arrive before a node
+propagates them further. Appending inside the child loop can insert a node
+prematurely or repeatedly; appending only inside that loop also omits leaves.
+
+\subsection{The Diamond Graph Trap}
+Consider $c=a+a$ and $d=ca=2a^2$. At $a=3$, $c=6$ and $d=18$.
+Backpropagation first adds $a=3$ to $c$'s gradient and $c=6$ directly to
+$a$'s gradient. Then $c$ contributes 3 twice to $a$, yielding
+$\bar a=6+3+3=12$. The graph below shows repeated operand edges explicitly.
+\fig{computational_graph.pdf}{.88}{One shared Value, two operand roles, three total gradient contributions.}
+The visited set ensures each unique node appears once, preventing redundant
+execution on shared subgraphs. A genuine DAG cannot loop infinitely merely
+because a node is reused; revisiting causes duplicate work, potentially
+exponential traversal, and incorrect propagation if closures run repeatedly.
+The assignment warning motivates deduplication, but cycles are not created
+by ordinary forward operator construction.
+\clearpage
+
+\section{Neural-network API and training design}
+\subsection{Composition and parameter ownership}
+A shared \code{Module} supplies \code{zero\_grad()} through
+\code{parameters()}. A \code{Neuron(nin)} owns \code{nin} weights and one
+bias, all initialized independently from $\mathcal U(-1,1)$. Its output is
+\[
+ a=\tanh\left(\sum_{j=1}^{n_{in}}w_jx_j+b\right).
+\]
+A \code{Layer(nin,nout)} evaluates independent neurons on the same input.
+It returns a list for multiple outputs and a scalar Value for a single output,
+as required by the template. \code{MLP} chains these layers. When an
+intermediate layer has width one, it wraps that scalar in a one-element list
+before the next layer. This avoids a hidden shape failure in bottleneck
+architectures such as $2\to1\to3\to1$.
+
+Parameter collection flattens neuron, layer, and model ownership in a stable
+order, without cloning the Value objects. Gradients and updates therefore
+refer to the same underlying weights. Positive dimensions and exact input
+widths are validated so \code{zip} cannot silently discard missing inputs.
+
+\subsection{Reproducible experiment}
+The executed notebook creates two interleaving semicircles with Gaussian
+coordinate noise $\sigma=0.12$. There are 240 points and two features. A
+seeded, class-balanced split uses 160 for training and 80 for testing. Both
+the Python parameter RNG and NumPy data RNG use seed 42. No normalization
+statistics, gradients, early stopping decisions, or parameter updates use the
+test set.
+
+The network $2\to8\to8\to1$ has
+$(2+1)8+(8+1)8+(8+1)1=105$ trainable scalars, of which 88 are weights.
+Every layer uses tanh to preserve the template contract; class labels are
+$-1$ and $+1$, and scores are thresholded at zero. The loss is
+\[
+ L=\frac1{160}\sum_{i=1}^{160}(f_\theta(x_i)-y_i)^2
+      +\frac{10^{-4}}{88}\sum_{w\in W}w^2.
+\]
+Biases are excluded from regularization. The gradient of the data term with
+respect to score $s_i$ is $2(s_i-y_i)/160$; the weight penalty contributes
+$2\cdot10^{-4}w/88$ to each regularized weight.
+
+\subsection{Optimization lifecycle}
+For updates $e=0,\ldots,299$, use
+$\eta_e=0.12(1-0.75e/300)$. Each iteration computes predictions and scalar
+loss, calls \code{model.zero\_grad()}, runs \code{loss.backward()}, and applies
+$\theta\leftarrow\theta-\eta_e\nabla L$. A fresh forward graph is then
+constructed. Metrics are recorded at parameter states 0 through 300, so the
+last curve point and saved weights describe the same model.
+
+Logging and dense contours evaluate the learned scalar equations without
+allocating autodiff graphs. This inference path is checked against the actual
+MLP on all 240 dataset points to $10^{-12}$ tolerance. All optimization
+gradients still use Value and its chain-rule closures.
+\clearpage
+
+\section{Independent correctness evidence}
+The original template tests and workflow are unchanged. The local suite passes
+\textbf{\TestCount/\TestCount} cases: 12 original tests and 25 supplemental
+cases. Supplemental coverage includes repeated operands, topological edge
+ordering and uniqueness, reverse division/subtraction, fractional and negative
+powers, stable tanh, ReLU conventions, reset semantics, invalid shapes,
+all-parameter finite differences for a bottleneck MLP, and a loss-reduction
+training check.
+
+\subsection{Central finite differences}
+An independent script checks
+\[
+ f(x,y)=\tanh(xy+x^3)+\frac{e^{x-y}}{y^2+2}+\frac{2}{x^2+1}
+\]
+at 30 seeded points in $[-1,1]^2$. For each coordinate,
+\[
+ \frac{\partial f}{\partial x}\approx
+       \frac{f(x+h,y)-f(x-h,y)}{2h},\qquad h=10^{-6}.
+\]
+The real-valued reference uses Python math independently of the engine. All
+60 partials meet $|g-\hat g|<10^{-7}+10^{-6}|\hat g|$; the largest observed
+absolute error is \GradientError. Three analytic shared-node checks also pass.
+The finite-difference formula has $O(h^2)$ truncation error on smooth inputs;
+very small $h$ amplifies floating-point cancellation. These checks deliberately
+avoid singularities and ReLU's kink.
+
+\fig{verification_screenshot.jpg}{.96}{Browser screenshot of verbatim captured CLI output. Raw logs and JUnit XML accompany the submission.}
+This evidence view displays actual subprocess output rather than simulated
+results. Terminal UI automation is restricted in this environment; the CLI logs
+were rendered locally in a browser for screenshot capture. This is a browser
+capture of the console transcript, not a native terminal-window screenshot.
+\clearpage
+
+\section{Experimental results}
+\begin{center}
+\begin{tabular}{lrr}
+\toprule
+Metric & Before training & After 300 updates\\\midrule
+Training objective & \InitialObjective & \FinalObjective\\
+Training data MSE & \InitialTrainMSE & \FinalTrainMSE\\
+Held-out data MSE & \InitialTestMSE & \FinalTestMSE\\
+Training accuracy & \InitialTrainAccuracy\% & \TrainAccuracy\%\\
+Held-out accuracy & \InitialTestAccuracy\% & \TestAccuracy\%\\
+\bottomrule
+\end{tabular}
+\end{center}
+\fig{training_curves.pdf}{.98}{Both data loss and accuracy are measured at the same recorded parameter states.}
+The training objective decreases from \InitialObjective{} to
+\FinalObjective. Held-out accuracy reaches \TestAccuracy\%, or
+\TestCorrect{} correctly classified samples out of 80. The test split is
+balanced, so an always-one-class classifier would score 50\%. The curves
+show how optimization changes fit and classification, while the decision
+boundary on the next page makes the nonlinear geometry explicit.
+
+\textbf{Interpretation.} A few hundred scalar gradient updates are enough for
+this compact network to fit the curved structure. MSE measures confidence as
+well as classification: correctly signed scores can still contribute error
+when their magnitude differs from the target. The small L2 term discourages
+large weights but is not evidence of a universally optimal regularization
+strength.
+
+\textbf{Limits.} This is a single seeded synthetic experiment, not a benchmark
+across datasets or repeated random trials. Finite samples and label-preserving
+noise limit the conclusions about generalization. Test curves are reported for
+inspection; the schedule and number of updates are fixed in advance.
+\clearpage
+
+\section{Learned decision geometry}
+\fig{decision_boundary.pdf}{.98}{Circles are training points; triangles are reserved test points. The dark contour is score zero.}
+The score field is a composition of tanh activations and learned affine maps.
+Its curved zero contour separates the interlocking arcs, which a single
+straight line cannot fully describe. The color scale conveys output score,
+not a calibrated probability. Outside the sampled arcs the contour is an
+extrapolation; an attractive plot alone does not establish reliability there.
+
+\subsection{Why nonlinear layers matter}
+Without activations, composing affine maps produces another affine map,
+$W_2(W_1x+b_1)+b_2=(W_2W_1)x+(W_2b_1+b_2)$. Hidden depth by itself
+would then fail to add nonlinear decision geometry. Tanh breaks this collapse
+and supplies smooth derivatives, allowing the scalar chain rule to train
+multiple layers together. Saturation can make those derivatives small, which
+is one reason to examine both loss and accuracy during learning.
+
+\subsection{Reproducible outputs}
+The executed notebook embeds the graph, learning curves, decision plot, and
+printed metrics. The exact generated data and train/test indices are saved in
+\code{artifacts/dataset.npz}; learned scalars, per-update history, final metrics,
+and verification details are also exported in readable JSON. Every plotted
+figure is supplied as a 300 DPI PNG and a vector PDF.
+\clearpage
+
+\section{Executed notebook and submission reproduction}
+\fig{notebook_results_screenshot.jpg}{.94}{The locally rendered, executed notebook: recorded outputs and figures are embedded in the saved file.}
+From the repository root, with Python 3.12 for the pinned notebook environment:
+\begin{lstlisting}
+python -m venv .venv
+# Activate the environment using the command for your platform.
+python -m pip install -r requirements.txt
+python -m pytest
+python -m scripts.verify
+python -m nbconvert --to notebook --execute --inplace notebooks/demo.ipynb
+python -m nbconvert --to html notebooks/demo.ipynb
+\end{lstlisting}
+The report source is compatible with \code{pdflatex} (run twice), or with
+Tectonic, which performs reruns automatically. This copy was compiled from
+LaTeX using portable Tectonic 0.17.0 because \code{pdflatex} was unavailable.
+\code{report/results.tex} records the measured experiment values.
+
+\textbf{Part A.} The local branch is
+\nolinkurl{Yousef-Mohamed-Mahmoud-Helmy-Ismail_20P7954}.
+The trusted workflow grades only \code{src/engine.py} and \code{src/nn.py}.
+Local test success is not a claim that hosted CI has run. Remote push, opening
+a PR, and LMS upload are separate submission actions.
+
+\textbf{Part B.} The accompanying archive contains cleaned code, tests,
+reproduction instructions, the executed notebook, the compiled report and
+LaTeX source, plots, screenshots, and machine-readable verification evidence.
+\clearpage
+
+\section*{References and provenance}
+\begin{enumerate}
+\item Ain Shams University, Faculty of Engineering.
+\emph{CSE485-CSE488: Deep Learning, Assignment 1: MicroGrad (Scalar
+Autograd Engine)}. Supplied three-page assignment specification.
+\item Course template, README, source stubs, tests, and autograder workflow:
+\url{https://github.com/DL-Course-ASU/assignment-1-micrograd-template}.
+Inspected template commit
+\nolinkurl{2a9d379546bdc61b8e3ff846e551051ac0602bc6}.
+\item Andrej Karpathy. \emph{micrograd}, the educational inspiration named in
+the assignment. \url{https://github.com/karpathy/micrograd}.
+\item Python Software Foundation. Standard-library \code{math} functions.
+\url{https://docs.python.org/3/library/math.html}.
+\end{enumerate}
+\textbf{Implementation provenance.} The submitted implementation fills the
+course template while preserving its public signatures and tanh behavior.
+The optional Module base class, reverse arithmetic operators, ReLU,
+dimension checks, and numerical regression tests extend the template within
+the assignment's scalar scope. No external automatic differentiation library
+is imported by the engine, network, verification script, or training notebook.
+
+\textbf{Tooling provenance.} This submission was prepared with AI coding
+assistance. Code correctness is supported by the preserved course tests,
+additional independent checks, and executed experiment artifacts. The student
+can inspect and reproduce every saved result from the submitted sources.
+
+\textbf{Verification boundaries.} The report's measurements come from the
+saved run, rather than theoretical guarantees. Raw CLI transcripts and JUnit
+results can be rerun; screenshots provide visual context. The rendered PDF
+was inspected page by page for layout and missing content. The package
+manifest provides SHA-256 hashes for integrity checks after extraction.
+\end{document}

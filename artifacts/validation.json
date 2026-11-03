@@ -1,0 +1,15 @@
+{
+  "python": "3.12.14",
+  "template_tests": 12,
+  "supplemental_tests": 25,
+  "total_passed": 37,
+  "finite_difference_partials": 60,
+  "test_correct": 78,
+  "test_total": 80,
+  "notebook_code_cells": 8,
+  "notebook_errors": 0,
+  "saved_weights_match_metrics": true,
+  "report_pages": 11,
+  "pdf_visual_review": "all 11 rendered pages inspected",
+  "latex_layout_warnings": 0
+}

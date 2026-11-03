@@ -1,0 +1,5 @@
+Shared-node graphs: 3/3 PASS
+Composite pow/tanh/exp/division: 60/60 partial derivatives PASS
+Central difference h=1e-06
+Maximum absolute error: 2.986e-10
+SUPPLEMENTAL VERIFICATION: PASS

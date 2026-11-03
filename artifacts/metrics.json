@@ -1,0 +1,32 @@
+{
+  "seed": 42,
+  "epochs": 300,
+  "parameters": 105,
+  "train_samples": 160,
+  "test_samples": 80,
+  "initial": {
+    "epoch": 0,
+    "objective": 0.8036536133446845,
+    "train_mse": 0.8036167392195146,
+    "test_mse": 0.9804888323735979,
+    "train_accuracy": 0.7375,
+    "test_accuracy": 0.6375
+  },
+  "final": {
+    "epoch": 300,
+    "objective": 0.03246300461069391,
+    "train_mse": 0.03240937121475131,
+    "test_mse": 0.052757052652109435,
+    "train_accuracy": 0.99375,
+    "test_accuracy": 0.975
+  },
+  "training_seconds": 149.82142190006562,
+  "verification": {
+    "diamond_checks": 3,
+    "composite_points": 30,
+    "partial_derivatives_checked": 60,
+    "step": 1e-06,
+    "max_absolute_error": 2.985505176411607e-10,
+    "status": "PASS"
+  }
+}
