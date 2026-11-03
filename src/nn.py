@@ -1,56 +1,64 @@
 import random
+
 from src.engine import Value
+
 
 class Neuron:
     def __init__(self, nin):
-        # TODO: Initialize weights (w) as a list of Value objects (random uniform -1 to 1)
-        # TODO: Initialize bias (b) as a Value object (random uniform -1 to 1)
-        pass
+        if not isinstance(nin, int) or nin < 1:
+            raise ValueError('The number of inputs must be a positive integer')
+        self.w = [Value(random.uniform(-1, 1)) for _ in range(nin)]
+        self.b = Value(random.uniform(-1, 1))
 
-    def __call__(self, x):  # Neuron(nin)(x)
-        # TODO: Calculate w*x + b
-        # TODO: Pass the result through a tanh activation and return it
-        pass
+    def __call__(self, x):
+        if len(x) != len(self.w):
+            raise ValueError('The input size does not match the neuron weights')
+        total = sum((weight * value for weight, value in zip(self.w, x)), self.b)
+        return total.tanh()
 
     def parameters(self):
-        # TODO: Return a list of all parameters (weights + bias)
-        pass
+        return self.w + [self.b]
 
     def zero_grad(self):
-        # TODO: Call reset_grad() on all parameters
-        pass
+        for parameter in self.parameters():
+            parameter.reset_grad()
+
 
 class Layer:
     def __init__(self, nin, nout):
-        # TODO: Initialize a list of `nout` Neurons, each with `nin` inputs
-        pass
+        if not isinstance(nout, int) or nout < 1:
+            raise ValueError('The number of outputs must be a positive integer')
+        self.neurons = [Neuron(nin) for _ in range(nout)]
 
     def __call__(self, x):
-        # TODO: Pass input x through all neurons
-        # TODO: Return a single output if nout==1, else return a list of outputs
-        pass
+        outputs = [neuron(x) for neuron in self.neurons]
+        return outputs[0] if len(outputs) == 1 else outputs
 
     def parameters(self):
-        # TODO: Return a flattened list of all parameters in all neurons
-        pass
+        return [parameter for neuron in self.neurons for parameter in neuron.parameters()]
 
     def zero_grad(self):
-        # TODO: Zero the gradients of all parameters in this layer
-        pass
+        for parameter in self.parameters():
+            parameter.reset_grad()
+
 
 class MLP:
     def __init__(self, nin, nouts):
-        # TODO: Initialize a sequence of Layers based on the sizes in `nin` and `nouts` list
-        pass
+        if not nouts:
+            raise ValueError('The network must contain at least one layer')
+        sizes = [nin] + list(nouts)
+        self.layers = [Layer(sizes[i], sizes[i + 1]) for i in range(len(nouts))]
 
     def __call__(self, x):
-        # TODO: Pass input x sequentially through all layers and return the final output
-        pass
+        for layer in self.layers:
+            if isinstance(x, Value):
+                x = [x]
+            x = layer(x)
+        return x
 
     def parameters(self):
-        # TODO: Return a flattened list of all parameters in all layers
-        pass
+        return [parameter for layer in self.layers for parameter in layer.parameters()]
 
     def zero_grad(self):
-        # TODO: Zero the gradients of all parameters in the MLP
-        pass
+        for parameter in self.parameters():
+            parameter.reset_grad()
