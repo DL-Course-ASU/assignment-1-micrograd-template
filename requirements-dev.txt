@@ -1,0 +1,11 @@
+# Needed only for the extra tests and demo.ipynb. The engine itself uses just the
+# Python standard library.
+pytest
+numpy
+scikit-learn
+matplotlib
+nbformat
+nbconvert
+ipykernel
+# Optional: the PyTorch gradient comparisons are skipped if this is missing.
+torch
