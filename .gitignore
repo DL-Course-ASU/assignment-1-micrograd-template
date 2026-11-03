@@ -216,3 +216,13 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local authoring/runtime files (excluded from the submission).
+.tools/
+tmp/
+report/*.aux
+report/*.out
+report/*.toc
+report/*.synctex.gz
+report/report.pdf
+SUBMISSION_MANIFEST.json

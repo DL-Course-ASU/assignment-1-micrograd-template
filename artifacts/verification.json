@@ -1,0 +1,8 @@
+{
+  "diamond_checks": 3,
+  "composite_points": 30,
+  "partial_derivatives_checked": 60,
+  "step": 1e-06,
+  "max_absolute_error": 2.985505176411607e-10,
+  "status": "PASS"
+}

@@ -1,0 +1,22 @@
+<!doctype html><meta charset="utf-8"><title>MicroGrad verification evidence</title>
+<style>body{background:#edf2f6;color:#17354a;margin:0;font:18px Segoe UI,sans-serif}
+main{max-width:1100px;margin:30px auto;background:white;padding:30px 40px;border-radius:12px}
+h1{font-size:30px;margin:0 0 8px}p{color:#456075}h2{font-size:21px;margin-top:26px}
+pre{font:18px/1.65 Consolas,monospace;white-space:pre-wrap;background:#132536;color:#e4f6f3;padding:22px;border-radius:8px}
+.badge{color:#14623f;background:#dcf4e6;display:inline-block;padding:8px 14px;border-radius:6px;font-weight:bold}
+small{color:#5f7387}</style><main><h1>MicroGrad | Verification evidence</h1>
+<p>Yousef Mohamed Mahmoud Helmy Ismail · 20P7954</p>
+<div class="badge">37 / 37 local tests passed</div>
+<h2>Captured pytest output</h2><pre>COMMAND: python -m pytest -q
+.....................................                                    [100%]
+37 passed in 0.21s
+</pre>
+<h2>Independent analytic and numerical checks</h2><pre>COMMAND: python -m scripts.verify
+Shared-node graphs: 3/3 PASS
+Composite pow/tanh/exp/division: 60/60 partial derivatives PASS
+Central difference h=1e-06
+Maximum absolute error: 2.986e-10
+SUPPLEMENTAL VERIFICATION: PASS
+</pre>
+<small>Verbatim CLI transcripts rendered in a browser. This is not a native terminal-window capture.<br>
+Raw transcripts: artifacts/pytest.txt and artifacts/verification.txt; structured results: artifacts/pytest.xml.</small></main>
