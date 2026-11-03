@@ -65,4 +65,3 @@ class MLP(Module):
 
     def parameters(self):
         return [p for layer in self.layers for p in layer.parameters()]
-

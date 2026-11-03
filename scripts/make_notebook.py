@@ -10,8 +10,8 @@ def code(text):
     cells.append(nbf.v4.new_code_cell(text.strip()))
 
 md("""# MicroGrad: from scalar derivatives to a classifier
-**Yousef Mohamed Mahmoud Helmy Ismail · 20P7954**  
-Ain Shams University, Faculty of Engineering · CSE485-CSE488: Deep Learning  
+**Yousef Mohamed Mahmoud Helmy Ismail · 20P7954**\x20\x20
+Ain Shams University, Faculty of Engineering · CSE485-CSE488: Deep Learning\x20\x20
 Assignment 1 · 3 November 2026
 
 This notebook builds all training derivatives with `src.engine.Value` and trains

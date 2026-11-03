@@ -142,4 +142,3 @@ def test_descent_decreases_loss():
         for p in m.parameters():
             p.data -= .1*p.grad
     assert loss().data < .35*initial
-

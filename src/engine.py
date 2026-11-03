@@ -121,4 +121,3 @@ class Value:
 
     def __float__(self):
         return float(self.data)
-

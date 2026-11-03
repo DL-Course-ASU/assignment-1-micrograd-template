@@ -1,7 +1,7 @@
 # Assignment 1: MicroGrad
 
-Student: **Yousef Mohamed Mahmoud Helmy Ismail**  
-ID: **20P7954**  
+Student: **Yousef Mohamed Mahmoud Helmy Ismail**<br>
+ID: **20P7954**<br>
 Branch: `Yousef-Mohamed-Mahmoud-Helmy-Ismail_20P7954`
 
 This submission implements the supplied course template at commit
