@@ -1,56 +1,61 @@
 import random
 from src.engine import Value
-
 class Neuron:
     def __init__(self, nin):
-        # TODO: Initialize weights (w) as a list of Value objects (random uniform -1 to 1)
-        # TODO: Initialize bias (b) as a Value object (random uniform -1 to 1)
-        pass
+        # Kol neuron 3ando weight le kol input, w bias wa7ed.
+        self.w = [Value(random.uniform(-1, 1)) for _ in range(nin)]
+        self.b = Value(random.uniform(-1, 1))
 
-    def __call__(self, x):  # Neuron(nin)(x)
-        # TODO: Calculate w*x + b
-        # TODO: Pass the result through a tanh activation and return it
-        pass
+    def __call__(self, x):
+        # Bngma3 el inputs ba3d ma ndrab kol wa7ed fel weight beta3o, w nzed el bias.
+        activation = sum((wi * xi for wi, xi in zip(self.w, x)), self.b)
+        return activation.tanh()
 
     def parameters(self):
-        # TODO: Return a list of all parameters (weights + bias)
-        pass
+        return self.w + [self.b]
 
     def zero_grad(self):
-        # TODO: Call reset_grad() on all parameters
-        pass
+        for p in self.parameters():
+            p.reset_grad()
+
 
 class Layer:
     def __init__(self, nin, nout):
-        # TODO: Initialize a list of `nout` Neurons, each with `nin` inputs
-        pass
+        # El layer 3ebara 3an مجموعة neurons, kol wa7ed byest2bel nafs 3adad el inputs.
+        self.neurons = [Neuron(nin) for _ in range(nout)]
 
     def __call__(self, x):
-        # TODO: Pass input x through all neurons
-        # TODO: Return a single output if nout==1, else return a list of outputs
-        pass
+        outputs = [neuron(x) for neuron in self.neurons]
+
+        # Law fe neuron wa7ed bas, bnرجع Value mesh list.
+        return outputs[0] if len(outputs) == 1 else outputs
 
     def parameters(self):
-        # TODO: Return a flattened list of all parameters in all neurons
-        pass
+        return [p for neuron in self.neurons for p in neuron.parameters()]
 
     def zero_grad(self):
-        # TODO: Zero the gradients of all parameters in this layer
-        pass
+        for p in self.parameters():
+            p.reset_grad()
+
 
 class MLP:
     def __init__(self, nin, nouts):
-        # TODO: Initialize a sequence of Layers based on the sizes in `nin` and `nouts` list
-        pass
+        # Bn7awel a3dad el neurons le sizes 3ashan nebny el layers wara ba3d.
+        sizes = [nin] + list(nouts)
+        self.layers = [
+            Layer(sizes[i], sizes[i + 1])
+            for i in range(len(nouts))
+        ]
 
     def __call__(self, x):
-        # TODO: Pass input x sequentially through all layers and return the final output
-        pass
+        # El output beta3 kol layer byed5ol input lel layer elly ba3do.
+        for layer in self.layers:
+            x = layer(x)
+        return x
 
     def parameters(self):
-        # TODO: Return a flattened list of all parameters in all layers
-        pass
+        return [p for layer in self.layers for p in layer.parameters()]
 
     def zero_grad(self):
-        # TODO: Zero the gradients of all parameters in the MLP
-        pass
+        for p in self.parameters():
+            p.reset_grad()
