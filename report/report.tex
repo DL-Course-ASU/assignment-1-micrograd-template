@@ -152,7 +152,7 @@ The search is a post-order depth-first search: a node is appended only after all
 
 \paragraph{Post-order trap.} If the node were appended \emph{before} its children are visited (pre-order), a parent could appear in the list before a node that also depends on it through another path. In the reversed list that node would then run its \texttt{\_backward} before its own gradient is complete, and the missing part would never reach the leaves.
 
-\paragraph{Diamond trap.} Consider $a = 3$, $c = a + a$, $d = c \cdot a$. The node $a$ is reached by three paths. Without the \texttt{visited} set, $a$ would be added to \texttt{topo} several times, and its \texttt{\_backward} would run several times. That is harmless for a leaf, but if $a$ were an inner node its children would receive the same contribution more than once. With the set, every node appears exactly once.
+\paragraph{Diamond trap.} Consider $a = 3$, $c = a + a$, $d = c \cdot a$. The node $a$ is reached by two paths, directly from $d$ and through $c$. Without the \texttt{visited} set, $a$ would be added to \texttt{topo} several times, and its \texttt{\_backward} would run several times. That is harmless for a leaf, but if $a$ were an inner node its children would receive the same contribution more than once. With the set, every node appears exactly once.
 
 A related requirement is that gradients are \emph{accumulated} with \texttt{+=}. For $c = a + a$, \texttt{\_prev} is the set $\{a\}$, but \texttt{\_backward} still writes to \texttt{self.grad} and \texttt{other.grad}, which are the same object. With \texttt{+=} both contributions add up:
 \[
@@ -160,7 +160,7 @@ A related requirement is that gradients are \emph{accumulated} with \texttt{+=}.
   = \underbrace{c}_{\text{from }d=c\cdot a} + \underbrace{a \cdot (1 + 1)}_{\text{from }c=a+a}
   = 6 + 6 = 12 = 4a,
 \]
-which matches the analytic result. With plain \texttt{=} the second write would overwrite the first.
+which matches the analytic result. With plain \texttt{=}, the backward pass of $d$ first sets $a.\text{grad} = 6$, and then the backward pass of $c$ overwrites it twice with $3$, so the result would be $3$.
 
 \subsection{Worked example}
 
@@ -255,7 +255,7 @@ The loss falls by about a factor of 60 and every training point ends up on the c
 A node can only pass on its gradient once that gradient is complete. Reverse topological order processes every consumer of a node before the node itself, so each \texttt{\_backward} sees a final \texttt{out.grad}. Every node is visited once, so the backward pass costs about as much as the forward pass.
 
 \paragraph{Q2. Why must gradients be accumulated with \texttt{+=}?}
-By the multivariable chain rule, if a variable reaches the output through several paths, its derivative is the \emph{sum} of the contributions of all paths. Plain assignment keeps only the last path. The diamond graph $d = (a+a)\cdot a$ gives $6$ instead of $12$ with \texttt{=}.
+By the multivariable chain rule, if a variable reaches the output through several paths, its derivative is the \emph{sum} of the contributions of all paths. Plain assignment keeps only the last path. The diamond graph $d = (a+a)\cdot a$ gives $3$ instead of $12$ with \texttt{=}.
 
 \paragraph{Q3. Why do we need the \texttt{visited} set?}
 In a graph where a node is shared, depth-first search reaches the same node from several parents. Without the set the node is appended once per path. The work then grows exponentially with depth, and the same \texttt{\_backward} is applied repeatedly, which counts contributions more than once.
