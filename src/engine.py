@@ -10,70 +10,133 @@ class Value:
         self.label = label
 
     def __repr__(self):
-        # TODO: Return string representation, e.g., "Value(data=...)"
-        pass
+        return f"Value(data={self.data})"
 
     def __add__(self, other):  # self + other
-        # TODO: Handle both Value and scalar inputs
-        # TODO: Return new Value and implement _backward
-        pass
+        if isinstance(other, Value):
+            other_value = other
+        elif isinstance(other, (int, float)):
+            other_value = Value(other)
+        else:
+            raise TypeError(f"unsupported operand type for +: '{type(other).__name__}'")
+
+        out = Value(self.data + other_value.data, (self, other_value), '+')
+
+        def _backward():
+            self.grad += out.grad
+            other_value.grad += out.grad
+
+        out._backward = _backward
+        return out
 
     def __radd__(self, other):  # other + self
-        # TODO: Implement reverse addition
-        pass
+        return self + other
 
     def __mul__(self, other):  # self * other
-        # TODO: Handle both Value and scalar inputs
-        # TODO: Return new Value and implement _backward using product rule
-        pass
+        if isinstance(other, Value):
+            other_value = other
+        elif isinstance(other, (int, float)):
+            other_value = Value(other)
+        else:
+            raise TypeError(f"unsupported operand type for *: '{type(other).__name__}'")
+
+        out = Value(self.data * other_value.data, (self, other_value), '*')
+
+        def _backward():
+            self.grad += other_value.data * out.grad
+            other_value.grad += self.data * out.grad
+
+        out._backward = _backward
+        return out
 
     def __rmul__(self, other):  # other * self
-        # TODO: Implement reverse multiplication
-        pass
+        return self * other
 
     def __neg__(self):  # -self
-        # TODO: Implement negation
-        pass
+        return self * -1
 
     def __sub__(self, other):  # self - other
-        # TODO: Implement subtraction
-        pass
+        return self + (-other)
+
+    def __rsub__(self, other):  # other - self
+        if not isinstance(other, (int, float, Value)):
+            raise TypeError(f"unsupported operand type for -: '{type(other).__name__}'")
+        return (-self) + other
 
     def __truediv__(self, other):  # self / other
-        # TODO: Implement division using self * other**-1
-        pass
+        if isinstance(other, Value):
+            if other.data == 0:
+                raise ZeroDivisionError("division by zero")
+        elif isinstance(other, (int, float)):
+            if other == 0:
+                raise ZeroDivisionError("division by zero")
+        else:
+            raise TypeError(f"unsupported operand type for /: '{type(other).__name__}'")
+        return self * (other ** -1)
+
+    def __rtruediv__(self, other):  # other / self
+        if self.data == 0:
+            raise ZeroDivisionError("division by zero")
+        if not isinstance(other, (int, float, Value)):
+            raise TypeError(f"unsupported operand type for /: '{type(other).__name__}'")
+        return other * (self ** -1)
 
     def __pow__(self, other):  # self ** other
-        # TODO: Assert other is int or float
-        # TODO: Return new Value and implement _backward using power rule
-        pass
+        assert isinstance(other, (int, float)), "exponent must be an int or float"
+        out = Value(self.data ** other, (self,), f'**{other}')
+
+        def _backward():
+            if other != 0:
+                self.grad += other * self.data ** (other - 1) * out.grad
+
+        out._backward = _backward
+        return out
 
     def tanh(self):  # tanh(self)
-        # TODO: Implement hyperbolic tangent activation
-        # TODO: Implement _backward for tanh
-        pass
+        value = math.tanh(self.data)
+        out = Value(value, (self,), 'tanh')
+
+        def _backward():
+            self.grad += (1 - value ** 2) * out.grad
+
+        out._backward = _backward
+        return out
 
     def exp(self):  # e**self
-        # TODO: Implement exponential function (math.exp)
-        # TODO: Implement _backward for exp
-        pass
+        value = math.exp(self.data)
+        out = Value(value, (self,), 'exp')
+
+        def _backward():
+            self.grad += value * out.grad
+
+        out._backward = _backward
+        return out
 
     def reset_grad(self):
-        # TODO: Reset self.grad to 0.0
-        pass
+        self.grad = 0.0
 
     def _get_topo(self):
-        # TODO: Return a list of all nodes in topological order
-        pass
+        topo = []
+        visited = set()
+
+        def visit(node):
+            if node not in visited:
+                visited.add(node)
+                for parent in node._prev:
+                    visit(parent)
+                topo.append(node)
+
+        visit(self)
+        return topo
 
     def backward(self):
-        # TODO: Retrieve topological order, set root grad to 1.0, and apply _backward in reverse
-        pass
+        topo = self._get_topo()
+        self.grad = 1.0
+        for node in reversed(topo):
+            node._backward()
 
     def __int__(self):  # int(self)
-        # TODO: Return data as int
-        pass
+        return int(self.data)
 
     def __float__(self):  # float(self)
-        # TODO: Return data as float
-        pass
+        return float(self.data)
