@@ -63,11 +63,13 @@ class Value:
     def __pow__(self, other):  # self ** other
         # TODO: Assert other is int or float
         # TODO: Return new Value and implement _backward using power rule
-        ans = Value(self.data**other, (self, ), 'pow')
+        other = other if isinstance(other, Value) else Value(other)
+        ans = Value(self.data**other.data, (self, ), 'pow')
         
         def _backward():
-            self.grad += other * (self.data**(other-1)) * ans.grad
+            self.grad += other.data * (self.data**(other.data-1)) * ans.grad
         ans._backward = _backward
+        return ans
 
     def tanh(self):  # tanh(self)
         # TODO: Implement hyperbolic tangent activation
