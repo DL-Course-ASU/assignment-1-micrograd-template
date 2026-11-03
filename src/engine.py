@@ -1,79 +1,224 @@
 import math
 
+
 class Value:
+
     def __init__(self, data, _children=(), _op='', label=''):
         self.data = data
-        self.grad = 0.0  # means no effect by default
+        self.grad = 0.0
         self._backward = lambda: None
         self._prev = set(_children)
         self._op = _op
         self.label = label
 
+    # ==========================================
+    # 1. STRING REPRESENTATION
+    # ==========================================
+
     def __repr__(self):
-        # TODO: Return string representation, e.g., "Value(data=...)"
-        pass
+        return f"Value(data={self.data})"
 
-    def __add__(self, other):  # self + other
-        # TODO: Handle both Value and scalar inputs
-        # TODO: Return new Value and implement _backward
-        pass
+    # ==========================================
+    # 2. ADDITION
+    # ==========================================
 
-    def __radd__(self, other):  # other + self
-        # TODO: Implement reverse addition
-        pass
+    def __add__(self, other):
 
-    def __mul__(self, other):  # self * other
-        # TODO: Handle both Value and scalar inputs
-        # TODO: Return new Value and implement _backward using product rule
-        pass
+        other = other if isinstance(other, Value) else Value(other)
 
-    def __rmul__(self, other):  # other * self
-        # TODO: Implement reverse multiplication
-        pass
+        out = Value(
+            self.data + other.data,
+            (self, other),
+            '+'
+        )
 
-    def __neg__(self):  # -self
-        # TODO: Implement negation
-        pass
+        def _backward():
+            self.grad += out.grad
+            other.grad += out.grad
 
-    def __sub__(self, other):  # self - other
-        # TODO: Implement subtraction
-        pass
+        out._backward = _backward
 
-    def __truediv__(self, other):  # self / other
-        # TODO: Implement division using self * other**-1
-        pass
+        return out
 
-    def __pow__(self, other):  # self ** other
-        # TODO: Assert other is int or float
-        # TODO: Return new Value and implement _backward using power rule
-        pass
+    # ==========================================
+    # 3. REVERSE ADDITION
+    # ==========================================
 
-    def tanh(self):  # tanh(self)
-        # TODO: Implement hyperbolic tangent activation
-        # TODO: Implement _backward for tanh
-        pass
+    def __radd__(self, other):
+        return self + other
 
-    def exp(self):  # e**self
-        # TODO: Implement exponential function (math.exp)
-        # TODO: Implement _backward for exp
-        pass
+    # ==========================================
+    # 4. MULTIPLICATION
+    # ==========================================
+
+    def __mul__(self, other):
+
+        other = other if isinstance(other, Value) else Value(other)
+
+        out = Value(
+            self.data * other.data,
+            (self, other),
+            '*'
+        )
+
+        def _backward():
+            self.grad += other.data * out.grad
+            other.grad += self.data * out.grad
+
+        out._backward = _backward
+
+        return out
+
+    # ==========================================
+    # 5. REVERSE MULTIPLICATION
+    # ==========================================
+
+    def __rmul__(self, other):
+        return self * other
+
+    # ==========================================
+    # 6. NEGATION
+    # ==========================================
+
+    def __neg__(self):
+        return self * -1
+
+    # ==========================================
+    # 7. SUBTRACTION
+    # ==========================================
+
+    def __sub__(self, other):
+        return self + (-other)
+
+    # ==========================================
+    # 8. DIVISION
+    # ==========================================
+
+    def __truediv__(self, other):
+
+        other = other if isinstance(other, Value) else Value(other)
+
+        return self * other**-1
+
+    # ==========================================
+    # 9. POWER
+    # ==========================================
+
+    def __pow__(self, other):
+
+        assert isinstance(other, (int, float))
+
+        out = Value(
+            self.data ** other,
+            (self,),
+            f'**{other}'
+        )
+
+        def _backward():
+            self.grad += (
+                other * self.data ** (other - 1)
+            ) * out.grad
+
+        out._backward = _backward
+
+        return out
+
+    # ==========================================
+    # 10. TANH ACTIVATION
+    # ==========================================
+
+    def tanh(self):
+
+        t = math.tanh(self.data)
+
+        out = Value(
+            t,
+            (self,),
+            'tanh'
+        )
+
+        def _backward():
+            self.grad += (1 - t**2) * out.grad
+
+        out._backward = _backward
+
+        return out
+
+    # ==========================================
+    # 11. EXPONENTIAL FUNCTION
+    # ==========================================
+
+    def exp(self):
+
+        x = math.exp(self.data)
+
+        out = Value(
+            x,
+            (self,),
+            'exp'
+        )
+
+        def _backward():
+            self.grad += x * out.grad
+
+        out._backward = _backward
+
+        return out
+
+    # ==========================================
+    # 12. RESET GRADIENT
+    # ==========================================
 
     def reset_grad(self):
-        # TODO: Reset self.grad to 0.0
-        pass
+        self.grad = 0.0
+
+    # ==========================================
+    # 13. TOPOLOGICAL SORT
+    # ==========================================
 
     def _get_topo(self):
-        # TODO: Return a list of all nodes in topological order
-        pass
+
+        topo = []
+        visited = set()
+
+        def build_topo(node):
+
+            if node not in visited:
+
+                visited.add(node)
+
+                for child in node._prev:
+                    build_topo(child)
+
+                topo.append(node)
+
+        build_topo(self)
+
+        return topo
+
+    # ==========================================
+    # 14. BACKPROPAGATION
+    # ==========================================
 
     def backward(self):
-        # TODO: Retrieve topological order, set root grad to 1.0, and apply _backward in reverse
-        pass
 
-    def __int__(self):  # int(self)
-        # TODO: Return data as int
-        pass
+        topo = self._get_topo()
 
-    def __float__(self):  # float(self)
-        # TODO: Return data as float
-        pass
+        self.grad = 1.0
+
+        for node in reversed(topo):
+            node._backward()
+
+    # ==========================================
+    # 15. INTEGER CONVERSION
+    # ==========================================
+
+    def __int__(self):
+        return int(self.data)
+
+    # ==========================================
+    # 16. FLOAT CONVERSION
+    # ==========================================
+
+    def __float__(self):
+        return float(self.data)
