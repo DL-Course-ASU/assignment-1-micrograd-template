@@ -1,8 +1,9 @@
 import math
+import numbers
 
 class Value:
     def __init__(self, data, _children=(), _op='', label=''):
-        self.data = data
+        self.data = float(data)
         self.grad = 0.0  # means no effect by default
         self._backward = lambda: None
         self._prev = set(_children)
@@ -13,7 +14,7 @@ class Value:
         return f"Value(data={self.data})"
 
     def __add__(self, other):  # self + other
-        if not isinstance(other, (Value, int, float)):
+        if not isinstance(other, (Value, numbers.Number)):
             raise TypeError(f"Unsupported operand type(s) for +: 'Value' and '{type(other).__name__}'")
         other = other if isinstance(other, Value) else Value(other)
 
@@ -30,7 +31,7 @@ class Value:
         return self + other
 
     def __mul__(self, other):  # self * other
-        if not isinstance(other, (Value, int, float)):
+        if not isinstance(other, (Value, numbers.Number)):
             raise TypeError(f"Unsupported operand type(s) for *: 'Value' and '{type(other).__name__}'")
         other = other if isinstance(other, Value) else Value(other)
 
@@ -68,7 +69,7 @@ class Value:
         return other * (self ** -1)
 
     def __pow__(self, other):  # self ** other
-        assert isinstance(other, (int, float)), "only supporting int/float powers for now"
+        assert isinstance(other, (int, float, numbers.Number)), "only supporting int/float powers for now"
         out = Value(self.data ** other, (self,), f'**{other}')
 
         def _backward():
